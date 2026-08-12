@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "swarm_interfaces__py",
+		"source" : "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/swarm_interfaces__py"
+	}
+}

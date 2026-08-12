@@ -1,0 +1,1 @@
+/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_cpp/swarm_interfaces/msg/detail/detection__type_support.hpp

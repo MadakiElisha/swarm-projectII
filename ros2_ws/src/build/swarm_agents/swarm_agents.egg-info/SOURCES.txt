@@ -1,0 +1,10 @@
+setup.cfg
+setup.py
+swarm_agents/__init__.py
+swarm_agents/agent_core.py
+swarm_agents/agent_node.py
+swarm_agents.egg-info/PKG-INFO
+swarm_agents.egg-info/SOURCES.txt
+swarm_agents.egg-info/dependency_links.txt
+swarm_agents.egg-info/entry_points.txt
+swarm_agents.egg-info/top_level.txt

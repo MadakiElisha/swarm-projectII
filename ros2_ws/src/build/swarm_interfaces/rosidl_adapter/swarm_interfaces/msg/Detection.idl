@@ -1,0 +1,25 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from swarm_interfaces/msg/Detection.msg
+// generated code does not contain a copyright notice
+
+#include "std_msgs/msg/Header.idl"
+
+module swarm_interfaces {
+  module msg {
+    struct Detection {
+      std_msgs::msg::Header header;
+
+      string class_name;
+
+      double confidence;
+
+      double bbox_x;
+
+      double bbox_y;
+
+      double bbox_w;
+
+      double bbox_h;
+    };
+  };
+};

@@ -1,0 +1,15 @@
+package.xml
+setup.cfg
+setup.py
+resource/swarm_mavlink
+swarm_mavlink/__init__.py
+swarm_mavlink/command_bridge.py
+swarm_mavlink/mavlink_bridge.py
+swarm_mavlink/telemetry_publisher.py
+swarm_mavlink.egg-info/PKG-INFO
+swarm_mavlink.egg-info/SOURCES.txt
+swarm_mavlink.egg-info/dependency_links.txt
+swarm_mavlink.egg-info/entry_points.txt
+swarm_mavlink.egg-info/requires.txt
+swarm_mavlink.egg-info/top_level.txt
+swarm_mavlink.egg-info/zip-safe

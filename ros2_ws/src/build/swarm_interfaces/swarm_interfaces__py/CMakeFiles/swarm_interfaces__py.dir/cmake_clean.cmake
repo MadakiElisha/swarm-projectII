@@ -1,0 +1,32 @@
+file(REMOVE_RECURSE
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/_swarm_interfaces_s.ep.rosidl_typesupport_c.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/_swarm_interfaces_s.ep.rosidl_typesupport_fastrtps_c.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/_swarm_interfaces_s.ep.rosidl_typesupport_introspection_c.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/__init__.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_detection.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_detection_array.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_detection_array_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_detection_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_drone_command.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_drone_command_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_drone_telemetry.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_drone_telemetry_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_mesh_edge.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_mesh_edge_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_mesh_topology.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_mesh_topology_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_task_assignment.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_task_assignment_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_task_complete.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_task_complete_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_task_relinquish.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_task_relinquish_s.c"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_task_request.py"
+  "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/msg/_task_request_s.c"
+  "CMakeFiles/swarm_interfaces__py"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang )
+  include(CMakeFiles/swarm_interfaces__py.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

@@ -1,0 +1,79 @@
+{
+	"backtrace" : 1,
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"add_custom_target"
+		],
+		"files" : 
+		[
+			"/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/swarm_interfaces__py/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 36,
+				"parent" : 0
+			}
+		]
+	},
+	"dependencies" : 
+	[
+		{
+			"id" : "swarm_interfaces::@6890427a1f51a3e7e1df"
+		}
+	],
+	"id" : "swarm_interfaces__py::@d25b07df7330d5f63c01",
+	"name" : "swarm_interfaces__py",
+	"paths" : 
+	{
+		"build" : "swarm_interfaces__py",
+		"source" : "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/swarm_interfaces__py"
+	},
+	"sourceGroups" : 
+	[
+		{
+			"name" : "",
+			"sourceIndexes" : 
+			[
+				0
+			]
+		},
+		{
+			"name" : "CMake Rules",
+			"sourceIndexes" : 
+			[
+				1,
+				2
+			]
+		}
+	],
+	"sources" : 
+	[
+		{
+			"backtrace" : 1,
+			"isGenerated" : true,
+			"path" : "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/swarm_interfaces__py/CMakeFiles/swarm_interfaces__py",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/swarm_interfaces__py/CMakeFiles/swarm_interfaces__py.rule",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_py/swarm_interfaces/_swarm_interfaces_s.ep.rosidl_typesupport_fastrtps_c.c.rule",
+			"sourceGroupIndex" : 1
+		}
+	],
+	"type" : "UTILITY"
+}

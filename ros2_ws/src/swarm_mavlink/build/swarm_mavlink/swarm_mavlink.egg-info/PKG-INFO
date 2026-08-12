@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: swarm-mavlink
+Version: 0.1.0
+Summary: Telemetry sources: simulated publisher + real MAVLink bridge
+Maintainer: Madaki Elisha
+Maintainer-email: stefannelisha@gmail.com
+License: MIT

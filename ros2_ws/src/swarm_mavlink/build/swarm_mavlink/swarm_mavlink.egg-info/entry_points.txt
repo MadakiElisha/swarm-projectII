@@ -1,0 +1,4 @@
+[console_scripts]
+command_bridge = swarm_mavlink.command_bridge:main
+mavlink_bridge = swarm_mavlink.mavlink_bridge:main
+telemetry_publisher = swarm_mavlink.telemetry_publisher:main

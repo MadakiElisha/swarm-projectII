@@ -1,0 +1,21 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from swarm_interfaces/msg/TaskRequest.msg
+// generated code does not contain a copyright notice
+
+#include "std_msgs/msg/Header.idl"
+
+module swarm_interfaces {
+  module msg {
+    struct TaskRequest {
+      std_msgs::msg::Header header;
+
+      string task_id;
+
+      double lat;
+
+      double lon;
+
+      string description;
+    };
+  };
+};

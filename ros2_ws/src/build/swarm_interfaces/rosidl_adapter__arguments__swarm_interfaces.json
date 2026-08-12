@@ -1,0 +1,15 @@
+{
+  "package_name": "swarm_interfaces",
+  "non_idl_tuples": [
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/DroneTelemetry.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/MeshEdge.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/MeshTopology.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/TaskRequest.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/TaskAssignment.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/TaskComplete.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/Detection.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/DetectionArray.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/DroneCommand.msg",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/swarm_interfaces:msg/TaskRelinquish.msg"
+  ]
+}

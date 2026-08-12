@@ -1,0 +1,223 @@
+"""MAVLink<->ROS2 bridge v5: telemetry up, operator commands down,
+and autonomous task execution (fly to won tasks) on one persistent link."""
+import threading
+import time
+
+import rclpy
+from rclpy.node import Node
+from pymavlink import mavutil
+
+from swarm_interfaces.msg import (
+    DroneTelemetry, DroneCommand, TaskRequest, TaskAssignment,
+)
+from swarm_common.validation import (
+    validate_lat, validate_lon, validate_battery, validate_label, ValidationError,
+)
+
+
+class MavlinkBridge(Node):
+    def __init__(self):
+        super().__init__('mavlink_bridge')
+        self.declare_parameter('drone_label', 'D1')
+        self.declare_parameter('mavlink_url', 'tcp:127.0.0.1:5770')
+        self.label = self.get_parameter('drone_label').value
+        self.url = self.get_parameter('mavlink_url').value
+        self.publisher_ = self.create_publisher(DroneTelemetry, '/swarm/telemetry', 10)
+        self.create_subscription(DroneCommand, '/swarm/commands', self.on_cmd, 10)
+        self.create_subscription(TaskRequest, '/swarm/task_requests', self.on_task_req, 10)
+        self.create_subscription(TaskAssignment, '/swarm/task_assignments', self.on_assignment, 10)
+        self._lock = threading.Lock()
+        self.conn = None
+        self.lat = None
+        self.lon = None
+        self.alt = 0.0
+        self.alt_msl = 0.0
+        self.battery_pct = None
+        self.tasks = {}
+        self._stop = False
+        self.get_logger().info(f'MAVLink bridge starting for {self.label} on {self.url}')
+        threading.Thread(target=self._mavlink_loop, daemon=True).start()
+        self.timer = self.create_timer(1.0, self.publish_state)
+
+    # ---task awareness + autonomous execution---
+    def on_task_req(self, m):
+        self.tasks[m.task_id] = (m.lat, m.lon)
+
+    def on_assignment(self, m):
+        if m.winner_label != self.label:
+            return
+        pos = self.tasks.get(m.task_id)
+        if pos is None:
+            self.get_logger().warning(f'{self.label}: won {m.task_id} but no coords yet')
+            return
+        threading.Thread(target=self._fly_to, args=(m.task_id, pos), daemon=True).start()
+
+    def _fly_to(self, task_id, pos):
+        M = mavutil.mavlink
+        lat, lon = pos
+        self.get_logger().info(f'{self.label}: flying to {task_id} @ {lat:.5f},{lon:.5f}')
+        self._send(lambda c: c.mav.command_long_send(
+            c.target_system, c.target_component, M.MAV_CMD_DO_SET_MODE, 0, 1, 4, 0, 0, 0, 0, 0))
+        time.sleep(1)
+        self._send(lambda c: c.mav.command_long_send(
+            c.target_system, c.target_component, M.MAV_CMD_COMPONENT_ARM_DISARM, 0, 1, 0, 0, 0, 0, 0, 0))
+        time.sleep(2)
+        self._send(lambda c: c.mav.command_long_send(
+            c.target_system, c.target_component, M.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, 30))
+        time.sleep(6)
+        with self._lock:
+            z = self.alt_msl or 50.0
+        self._send(lambda c: c.mav.command_long_send(
+            c.target_system, c.target_component, M.MAV_CMD_DO_REPOSITION,
+            0, 0, 0, 0, 0, lat, lon, z))
+        self.get_logger().info(f'{self.label}: enroute to {task_id}')
+
+    # ---operator uplink---
+    def on_cmd(self, m):
+        if m.label != self.label:
+            return
+        threading.Thread(target=self._execute, args=(m.command.upper(),), daemon=True).start()
+
+    def _send(self, fn):
+        with self._lock:
+            c = self.conn
+            if c is None:
+                return False
+            try:
+                fn(c)
+                return True
+            except Exception as e:
+                self.get_logger().error(f'{self.label}: send failed: {e}')
+                return False
+
+    def _execute(self, cmd):
+        for _ in range(10):
+            with self._lock:
+                if self.conn is not None:
+                    break
+            time.sleep(1)
+        else:
+            self.get_logger().warning(f'{self.label}: no live link for {cmd}')
+            return
+        M = mavutil.mavlink
+        ok = True
+        if cmd == 'ARM':
+            ok = self._send(lambda c: c.mav.command_long_send(
+                c.target_system, c.target_component, M.MAV_CMD_COMPONENT_ARM_DISARM, 0, 1, 0, 0, 0, 0, 0, 0))
+        elif cmd == 'DISARM':
+            ok = self._send(lambda c: c.mav.command_long_send(
+                c.target_system, c.target_component, M.MAV_CMD_COMPONENT_ARM_DISARM, 0, 0, 0, 0, 0, 0, 0, 0))
+        elif cmd == 'TAKEOFF':
+            ok = self._send(lambda c: c.mav.command_long_send(
+                c.target_system, c.target_component, M.MAV_CMD_DO_SET_MODE, 0, 1, 4, 0, 0, 0, 0, 0))
+            time.sleep(1)
+            ok &= self._send(lambda c: c.mav.command_long_send(
+                c.target_system, c.target_component, M.MAV_CMD_COMPONENT_ARM_DISARM, 0, 1, 0, 0, 0, 0, 0, 0))
+            time.sleep(2)
+            ok &= self._send(lambda c: c.mav.command_long_send(
+                c.target_system, c.target_component, M.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, 30))
+        elif cmd == 'RTL':
+            ok = self._send(lambda c: c.mav.command_long_send(
+                c.target_system, c.target_component, M.MAV_CMD_NAV_RETURN_TO_LAUNCH, 0, 0, 0, 0, 0, 0, 0, 0))
+        elif cmd == 'LAND':
+            ok = self._send(lambda c: c.mav.command_long_send(
+                c.target_system, c.target_component, M.MAV_CMD_NAV_LAND, 0, 0, 0, 0, 0, 0, 0, 0))
+        else:
+            self.get_logger().warning(f'{self.label}: unknown command {cmd}')
+            return
+        if ok:
+            self.get_logger().info(f'{self.label}: sent {cmd}')
+
+    # ---telemetry down---
+    def _mavlink_loop(self):
+        while not self._stop:
+            try:
+                conn = mavutil.mavlink_connection(self.url)
+                conn.wait_heartbeat(timeout=15)
+                with self._lock:
+                    self.conn = conn
+                self.get_logger().info(f'{self.label}: MAVLink connection established')
+            except Exception as e:
+                self.get_logger().warning(f'{self.label}: connect failed ({e}) - retrying in 2s')
+                time.sleep(2)
+                continue
+            last_gcs = 0.0
+            while not self._stop:
+                now = time.time()
+                if now - last_gcs >= 1.0:
+                    with self._lock:
+                        try:
+                            conn.mav.heartbeat_send(
+                                mavutil.mavlink.MAV_TYPE_GCS,
+                                mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+                            conn.mav.request_data_stream_send(
+                                conn.target_system, conn.target_component,
+                                mavutil.mavlink.MAV_DATA_STREAM_ALL, 4, 1)
+                        except Exception:
+                            pass
+                    last_gcs = now
+                try:
+                    msg = conn.recv_match(blocking=True, timeout=1)
+                except Exception:
+                    break
+                if msg is None:
+                    continue
+                mtype = msg.get_type()
+                if mtype == 'GLOBAL_POSITION_INT':
+                    with self._lock:
+                        self.lat = msg.lat / 1e7
+                        self.lon = msg.lon / 1e7
+                        self.alt = msg.relative_alt / 1000.0
+                        self.alt_msl = msg.alt / 1000.0
+                elif mtype == 'SYS_STATUS':
+                    if msg.battery_remaining >= 0:
+                        with self._lock:
+                            self.battery_pct = float(msg.battery_remaining)
+                elif mtype == 'STATUSTEXT':
+                    self.get_logger().info(f'[{self.label}] {msg.text}')
+                elif mtype == 'COMMAND_ACK':
+                    self.get_logger().info(
+                        f'[{self.label}] ACK cmd={msg.command} result={msg.result}')
+            with self._lock:
+                self.conn = None
+            self.get_logger().warning(f'{self.label}: MAVLink stream lost - reconnecting')
+
+    def publish_state(self):
+        with self._lock:
+            lat, lon, alt, batt = self.lat, self.lon, self.alt, self.battery_pct
+        if lat is None or batt is None:
+            self.get_logger().warning(
+                f'{self.label}: no real telemetry yet - is SITL running on {self.url}?')
+            return
+        try:
+            msg = DroneTelemetry()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.label = validate_label(self.label)
+            msg.lat = validate_lat(lat)
+            msg.lon = validate_lon(lon)
+            msg.alt = float(alt)
+            msg.battery_pct = validate_battery(batt)
+        except ValidationError as e:
+            self.get_logger().error(f'{self.label}: telemetry failed validation: {e}')
+            return
+        self.publisher_.publish(msg)
+
+    def destroy_node(self):
+        self._stop = True
+        super().destroy_node()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = MavlinkBridge()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

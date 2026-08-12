@@ -1,0 +1,20 @@
+{
+  "package_name": "swarm_interfaces",
+  "output_dir": "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_generator_type_description/swarm_interfaces",
+  "idl_tuples": [
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/DroneTelemetry.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/MeshEdge.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/MeshTopology.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/TaskRequest.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/TaskAssignment.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/TaskComplete.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/Detection.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/DetectionArray.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/DroneCommand.idl",
+    "/home/madakie/swarm-projectII/swarm-project/ros2_ws/src/build/swarm_interfaces/rosidl_adapter/swarm_interfaces:msg/TaskRelinquish.idl"
+  ],
+  "include_paths": [
+    "std_msgs:/opt/ros/jazzy/share/std_msgs",
+    "builtin_interfaces:/opt/ros/jazzy/share/builtin_interfaces"
+  ]
+}

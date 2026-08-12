@@ -1,0 +1,2 @@
+[console_scripts]
+agent_node = swarm_agents.agent_node:main
