@@ -38,6 +38,7 @@ class TaskAuctioneer(Node):
         self.busy_drones = {}
         self.auction_results = {}  # task_id -> TaskAssignment (assigned only)
         self.task_coords = {}      # task_id -> (lat, lon)
+        self.suggestions = {}      # task_id -> first-seen (awaiting human confirmation)
 
         self.create_subscription(DroneTelemetry, '/swarm/telemetry', self.on_telemetry, 10)
         self.create_subscription(MeshTopology, '/swarm/mesh_topology', self.on_topology, 10)
@@ -120,6 +121,18 @@ class TaskAuctioneer(Node):
             self.get_logger().info(f'{task_id}: already assigned - re-publishing stored result')
             self.publisher_.publish(self.auction_results[task_id])
             return
+
+        # M3.5a HITL: perception-sourced tasks need a human confirmation.
+        # First sighting is held as a suggestion; the repeated request
+        # (operator clicking the pulsing star in the GCS) releases it.
+        if task_id.startswith('RESCUE-') and task_id not in self.suggestions:
+            self.suggestions[task_id] = time.time()
+            self.get_logger().warn(
+                f'{task_id}: SUGGESTED by perception - awaiting human confirmation')
+            return
+        if task_id in self.suggestions:
+            del self.suggestions[task_id]
+            self.get_logger().info(f'{task_id}: human confirmed - auctioning')
 
         self._run_auction(task_id, task_lat, task_lon)
 

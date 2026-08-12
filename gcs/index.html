@@ -393,3 +393,32 @@ if (window.THREE) (function () {
   })();
 })();
 </script>
+<script>
+// ---- M3.5a: Human-in-the-Loop — auto sightings need a human click ----
+(function () {
+  if (!window.L || !window.ROSLIB || !window.map) return;
+  var st = document.createElement('style');
+  st.textContent = '@keyframes suggpulse{0%{transform:scale(1);opacity:1}50%{transform:scale(1.7);opacity:.55}100%{transform:scale(1);opacity:1}}.suggstar{width:16px;height:16px;background:orange;border:2px solid #fff;border-radius:50%;animation:suggpulse 1.2s infinite}';
+  document.head.appendChild(st);
+  var reqTopic = new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests',
+    messageType: 'swarm_interfaces/msg/TaskRequest' });
+  var sugg = {};
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests',
+    messageType: 'swarm_interfaces/msg/TaskRequest' }).subscribe(function (m) {
+    var id = m.task_id;
+    if (!id || id.indexOf('RESCUE-') !== 0 || sugg[id]) return;
+    sugg[id] = L.marker([m.lat, m.lon], {
+      icon: L.divIcon({ className: '', html: '<div class="suggstar"></div>', iconSize: [16, 16] })
+    }).addTo(map);
+    sugg[id].bindPopup('<b>SUGGESTED ' + id + '</b><br>YOLO sighting — human confirmation required<br>' +
+      '<button onclick="confirmSugg(\'' + id + '\',' + m.lat + ',' + m.lon + ')">★ Confirm dispatch</button>');
+  });
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_assignments',
+    messageType: 'swarm_interfaces/msg/TaskAssignment' }).subscribe(function (m) {
+    if (sugg[m.task_id]) { sugg[m.task_id].remove(); delete sugg[m.task_id]; }
+  });
+  window.confirmSugg = function (id, lat, lon) {
+    reqTopic.publish(new ROSLIB.Message({ task_id: id, lat: lat, lon: lon }));
+  };
+})();
+</script>
