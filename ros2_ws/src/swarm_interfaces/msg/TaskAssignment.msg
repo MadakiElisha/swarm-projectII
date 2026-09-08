@@ -1,0 +1,9 @@
+std_msgs/Header header
+string task_id
+string assigned_to
+string[] path
+float64 execute_at
+float64 arrive_by
+float32 offset_x
+float32 offset_y
+float32 orbit_radius

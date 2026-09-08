@@ -1,0 +1,11 @@
+std_msgs/Header header
+string label
+float64 lat
+float64 lon
+float64 alt
+float64 battery_pct
+float64 roll
+float64 pitch
+float64 yaw
+float64 wind_speed
+float64 wind_dir

@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>SWARM GCS</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/roslib@1.4.1/build/roslib.min.js"></script>
+<style>
+  html,body{margin:0;height:100%;font-family:monospace}
+  #map{height:100%}
+  #hud{position:absolute;top:10px;right:10px;z-index:1000;background:rgba(0,0,0,.82);
+       color:#0f0;padding:10px 14px;border-radius:6px;font-size:13px;line-height:1.6;max-width:340px}
+  #hud button{background:#032;color:#0f0;border:1px solid #0f0;border-radius:4px;
+       font-family:monospace;cursor:pointer;margin:2px 4px 2px 0}
+  .task{color:#f0a;font-size:18px;text-shadow:0 0 4px #000}
+  .taskdone{color:#0c0;font-size:18px;text-shadow:0 0 4px #000}
+  #hist{color:#9ff}
+  #roster{margin-top:6px}
+  .dr{cursor:pointer;padding:2px 4px;border-radius:4px}
+  .dr:hover{background:rgba(0,255,0,.12)}
+  .bar{display:inline-block;height:6px;border-radius:3px;vertical-align:middle}
+  #cam{position:absolute;left:10px;bottom:10px;z-index:1000;background:rgba(0,0,0,.8);
+       border:1px solid #0f0;border-radius:6px;padding:6px}
+  #cam img{width:280px;display:block;border-radius:4px}
+  #cam div{color:#0f0;font-size:12px;margin-bottom:4px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="hud">
+  SWARM GCS
+  <button onclick="fitFleet()">⌖ fit fleet</button><button onclick="toggleTiles()">🛰 sat</button><br/>
+  <span id="status">connecting…</span><br/>
+  <span id="stats"></span><br/>
+  <span id="log"></span>
+  <div id="roster"></div>
+  <div id="hist"></div>
+  <div style="color:#666;margin-top:6px">click map → dispatch task</div>
+</div>
+<div id="cam"><div id="camlabel">CAM: waiting for stream…</div><img id="camimg" alt=""/></div>
+<script>
+const map = L.map('map').setView([6.5244, 3.3792], 13);
+const osm  = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
+const esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom: 19});
+let sat = false;
+function toggleTiles(){ sat=!sat; if(sat){map.removeLayer(osm);esri.addTo(map);}else{map.removeLayer(esri);osm.addTo(map);} }
+window.toggleTiles = toggleTiles;
+
+const ros = new ROSLIB.Ros({ url: 'ws://localhost:9090' });
+const drones = {}, links = {}, tasks = {};
+let taskCounter = 1;
+
+const telTopic  = new ROSLIB.Topic({ros, name:'/swarm/telemetry',       messageType:'swarm_interfaces/msg/DroneTelemetry'});
+const meshTopic = new ROSLIB.Topic({ros, name:'/swarm/mesh_topology',   messageType:'swarm_interfaces/msg/MeshTopology'});
+const reqTopic  = new ROSLIB.Topic({ros, name:'/swarm/task_requests',   messageType:'swarm_interfaces/msg/TaskRequest'});
+const asgTopic  = new ROSLIB.Topic({ros, name:'/swarm/task_assignments',messageType:'swarm_interfaces/msg/TaskAssignment'});
+const camTopic  = new ROSLIB.Topic({ros, name:'/swarm/camera/compressed',messageType:'sensor_msgs/msg/CompressedImage'});
+
+ros.on('connection', () => { setStatus('ROS link: UP'); reqTopic.advertise(); });
+ros.on('close',  () => setStatus('ROS link: DOWN'));
+ros.on('error',  () => setStatus('ROS link: ERROR'));
+
+function setStatus(s){ document.getElementById('status').textContent = s; }
+function log(s){ document.getElementById('log').textContent = s; }
+function hist(s){
+  const el = document.getElementById('hist');
+  el.innerHTML = '» ' + s + '<br/>' + el.innerHTML.split('<br/>').slice(0,7).join('<br/>');
+}
+function stats(){ document.getElementById('stats').textContent =
+  'drones: ' + Object.keys(drones).length + ' | mesh links: ' + Object.keys(links).length; }
+function fitFleet(){
+  const pts = Object.values(drones).map(d => [d.lat, d.lon]);
+  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.4));
+}
+window.fitFleet = fitFleet;
+function focusDrone(l){ const d = drones[l]; if (d) map.setView([d.lat, d.lon], 16); }
+window.focusDrone = focusDrone;
+
+function roster(){
+  document.getElementById('roster').innerHTML =
+    Object.values(drones).sort((a,b)=>a.label<b.label?-1:1).map(d =>
+      '<div class="dr" onclick="focusDrone(\''+d.label+'\')">'+d.label+
+      ' <span class="bar" style="width:'+Math.max(4,d.batt*0.6)+'px;background:'+
+      (d.batt>50?'#0c0':d.batt>20?'#fa0':'#f00')+'"></span> '+Math.round(d.batt)+'%</div>').join('');
+}
+
+function drawDrone(d){
+  const color = d.batt > 50 ? '#0c0' : d.batt > 20 ? '#fa0' : '#f00';
+  if (!d.marker){
+    d.marker = L.circleMarker([d.lat, d.lon], {radius: 9, color, weight: 2, fillOpacity: .8}).addTo(map);
+    d.marker.bindTooltip(d.label);
+    d.marker.bindPopup(() => '<b>' + d.label + '</b><br/>battery: ' + Math.round(d.batt) +
+      '%<br/>' + d.lat.toFixed(5) + ', ' + d.lon.toFixed(5));
+  } else {
+    d.marker.setLatLng([d.lat, d.lon]);
+    d.marker.setStyle({color});
+  }
+  d.trail = d.trail || [];
+  d.trail.push([d.lat, d.lon]);
+  if (d.trail.length > 60) d.trail.shift();
+  if (d.trailLine) d.trailLine.setLatLngs(d.trail);
+  else d.trailLine = L.polyline(d.trail, {color:'#0f0', weight:1, opacity:.5}).addTo(map);
+  d.marker.setTooltipContent(d.label + ' · ' + Math.round(d.batt) + '%');
+}
+
+telTopic.subscribe(m => {
+  const label = m.label ?? m.drone_label;
+  const d = drones[label] || (drones[label] = {label});
+  d.lat = m.lat; d.lon = m.lon; d.batt = m.battery_pct ?? m.battery;
+  drawDrone(d); stats(); roster();
+});
+
+meshTopic.subscribe(m => {
+  Object.values(links).forEach(l => map.removeLayer(l));
+  for (const k in links) delete links[k];
+  (m.edges ?? []).forEach(e => {
+    const a = e.label_a ?? e.a, b = e.label_b ?? e.b;
+    if (drones[a] && drones[b]){
+      links[a+'-'+b] = L.polyline([[drones[a].lat, drones[a].lon],[drones[b].lat, drones[b].lon]],
+        {color:'#0af', weight:2, dashArray:'5 5'}).addTo(map);
+    }
+  });
+  stats();
+});
+
+reqTopic.subscribe(m => {
+  const id = m.task_id ?? m.id;
+  tasks[id] = L.marker([m.lat, m.lon], {icon: L.divIcon({className:'task', html:'★', iconSize:[18,18]})})
+    .addTo(map).bindTooltip(id);
+  log('task ' + id + ' requested');
+  hist('REQ ' + id + ' @ ' + m.lat.toFixed(3) + ',' + m.lon.toFixed(3));
+});
+
+asgTopic.subscribe(m => {
+  const winner = m.winner_label ?? m.assigned_to ?? m.winner;
+  log(m.task_id + ' → ' + winner);
+  hist('ASG ' + m.task_id + ' → ' + winner);
+  if (tasks[m.task_id])
+    tasks[m.task_id].setIcon(L.divIcon({className:'taskdone', html:'★', iconSize:[18,18]}));
+  const t = tasks[m.task_id], d = drones[winner];
+  if (t && d) L.polyline([[d.lat, d.lon], t.getLatLng()], {color:'#f0a', weight:3}).addTo(map);
+});
+
+camTopic.subscribe(m => {
+  const u = (typeof m.data === 'string')
+    ? Uint8Array.from(atob(m.data), c => c.charCodeAt(0))
+    : new Uint8Array(m.data);
+  const url = URL.createObjectURL(new Blob([u], {type:'image/jpeg'}));
+  const img = document.getElementById('camimg');
+  img.onload = () => URL.revokeObjectURL(url);
+  img.src = url;
+  document.getElementById('camlabel').textContent =
+    'CAM: ' + (m.header.frame_id || '?') + ' · ' + new Date().toLocaleTimeString();
+});
+
+map.on('click', e => {
+  const lat = e.latlng.lat, lon = e.latlng.lng;
+  L.popup({closeOnClick:false})
+    .setLatLng(e.latlng)
+    .setContent('<div style="font-family:monospace"><b>NEW TASK</b><br/>' +
+      lat.toFixed(4) + ', ' + lon.toFixed(4) + '<br/>' +
+      '<input id="tdesc" value="flood recon" style="width:150px"/><br/>' +
+      '<button id="tdispatch" style="margin-top:4px">★ Dispatch</button></div>')
+    .openOn(map);
+  setTimeout(() => {
+    const btn = document.getElementById('tdispatch');
+    if (btn) btn.onclick = () => {
+      const id = 'T' + taskCounter++;
+      const desc = document.getElementById('tdesc').value || 'task';
+      reqTopic.publish(new ROSLIB.Message({task_id:id, lat:lat, lon:lon, description:desc}));
+      log('dispatched ' + id);
+      map.closePopup();
+    };
+  }, 0);
+});
+
+setTimeout(() => { if (!Object.keys(drones).length) log('no telemetry yet - is swarm_real running?'); }, 6000);
+</script>
+</body>
+</html>
+<script>
+// v4 operator uplink
+document.body.insertAdjacentHTML('beforeend',
+  '<div id="cmdbar" style="position:absolute;bottom:10px;right:10px;z-index:1000;background:rgba(0,0,0,.82);color:#0f0;padding:8px 12px;border-radius:6px;font-family:monospace;font-size:13px">' +
+  'CMD <select id="cmdsel" style="background:#032;color:#0f0"></select> <span id="altread"></span> ' +
+  '<button onclick="cmd(\'ARM\')">ARM</button><button onclick="cmd(\'TAKEOFF\')">TAKEOFF</button>' +
+  '<button onclick="cmd(\'RTL\')">RTL</button><button onclick="cmd(\'LAND\')">LAND</button></div>');
+const cmdTopic = new ROSLIB.Topic({ros, name:'/swarm/commands', messageType:'swarm_interfaces/msg/DroneCommand'});
+ros.on('connection', () => cmdTopic.advertise());
+setInterval(() => {
+  const s = document.getElementById('cmdsel'); const cur = s.value;
+  s.innerHTML = Object.keys(drones).sort().map(l => '<option>'+l+'</option>').join('');
+  if (cur) s.value = cur;
+  const d = drones[s.value];
+  document.getElementById('altread').textContent = d ? 'alt ' + (d.alt ?? 0).toFixed(1) + 'm' : '';
+}, 1000);
+new ROSLIB.Topic({ros, name:'/swarm/telemetry', messageType:'swarm_interfaces/msg/DroneTelemetry'})
+  .subscribe(m => { const d = drones[m.label ?? m.drone_label]; if (d) d.alt = m.alt ?? 0; });
+function cmd(c){
+  const l = document.getElementById('cmdsel').value;
+  if (l){ cmdTopic.publish(new ROSLIB.Message({label:l, command:c})); log('CMD ' + c + ' → ' + l); }
+}
+window.cmd = cmd;
+</script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script>
+// ---- M4 v9: X500-style airframes + clean stage ----
+if (window.THREE) (function () {
+  var VEX = 12;
+  document.body.insertAdjacentHTML('beforeend',
+    '<div id="p3d" style="position:absolute;left:10px;top:10px;z-index:999;width:480px;background:rgba(0,0,0,.88);border:1px solid #0f0;border-radius:6px;overflow:hidden">' +
+    '<div id="p3dhdr" style="color:#0f0;font:12px monospace;padding:2px 6px">3D OPS · drag orbit · right-drag pan · wheel zoom · dblclick follow<span id="windspan" style="margin-left:10px;color:#7fdfff"></span>' +
+    '<button id="p3dfull" style="float:right;background:#032;color:#0f0;border:1px solid #0f0;border-radius:4px;font-family:monospace;cursor:pointer">⤢ full</button></div>' +
+    '<div id="p3dc" style="width:480px;height:340px"></div></div>');
+  var W = 480, H = 340, full = false;
+  var scene = new THREE.Scene();
+  var skyc = document.createElement('canvas'); skyc.width = 2; skyc.height = 256;
+  var sx = skyc.getContext('2d');
+  var grd = sx.createLinearGradient(0, 0, 0, 256);
+  grd.addColorStop(0, '#2a7ab8'); grd.addColorStop(0.55, '#9cc4d4'); grd.addColorStop(1, '#dfe8e2');
+  sx.fillStyle = grd; sx.fillRect(0, 0, 2, 256);
+  scene.background = new THREE.CanvasTexture(skyc);
+  scene.fog = new THREE.Fog(0xdfe7e0, 7000, 22000);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+  var dl = new THREE.DirectionalLight(0xffffff, 1.0);
+  dl.position.set(3000, 5000, 2500);
+  dl.castShadow = true;
+  dl.shadow.mapSize.set(1024, 1024);
+  dl.shadow.camera.left = -6000; dl.shadow.camera.right = 6000;
+  dl.shadow.camera.top = 6000; dl.shadow.camera.bottom = -6000;
+  dl.shadow.camera.far = 15000;
+  dl.shadow.bias = -0.0008;
+  if (dl.shadow.normalBias !== undefined) dl.shadow.normalBias = 0.02;
+  scene.add(dl);
+  var basePlane = new THREE.Mesh(new THREE.PlaneGeometry(80000, 80000),
+    new THREE.MeshLambertMaterial({ color: 0x8fa08a }));
+  basePlane.rotation.x = -Math.PI / 2; basePlane.position.y = -20;
+  scene.add(basePlane);
+  var ground = new THREE.Mesh(new THREE.PlaneGeometry(6080, 6080),
+    new THREE.MeshLambertMaterial({ color: 0xdddddd }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+  scene.add(ground);
+  var cam = new THREE.PerspectiveCamera(50, W / H, 10, 90000);
+  var ren = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+  ren.shadowMap.enabled = true; ren.shadowMap.type = THREE.PCFSoftShadowMap;
+  ren.setSize(W, H);
+  document.getElementById('p3dc').appendChild(ren.domElement);
+  window.SW3 = { scene: scene, toWorld: toWorld };
+  var leg = document.createElement('div');
+  leg.style.cssText = 'position:absolute;left:8px;bottom:52px;z-index:5;background:rgba(0,8,4,.78);border:1px solid #0f0;border-radius:4px;color:#9fffc0;font:11px monospace;padding:6px 8px;line-height:1.6;pointer-events:none;white-space:nowrap';
+  leg.innerHTML = '<b style="color:#eaffee">SWARM-PROJECT II</b> · 5-UAS decentralized SAR · SITL · ' +
+    '<span style="color:#fff">■</span> drone · <span style="color:#0f0">halo</span>=battery · beam=ground pin · ' +
+    '<span style="color:#f2a">○</span> perimeter · <span style="color:#f2a">◆</span> target · ' +
+    'mesh <span style="color:#29f">ok</span>/<span style="color:#fa0">deg</span>/<span style="color:#f22">crit</span>';
+  document.getElementById('p3d').appendChild(leg);
+
+  function setSize() {
+    W = full ? window.innerWidth : 480;
+    H = full ? window.innerHeight - 22 : 340;
+    var holder = document.getElementById('p3dc');
+    holder.style.width = W + 'px'; holder.style.height = H + 'px';
+    ren.setSize(W, H); cam.aspect = W / H; cam.updateProjectionMatrix();
+    var box = document.getElementById('p3d');
+    if (full) { box.style.position = 'fixed'; box.style.left = '0'; box.style.top = '0';
+      box.style.width = '100vw'; box.style.height = '100vh'; box.style.zIndex = 2000; }
+    else { box.style.position = 'absolute'; box.style.left = '10px'; box.style.top = '10px';
+      box.style.width = '480px'; box.style.height = 'auto'; box.style.zIndex = 999; }
+    ['hud', 'cmdbar', 'cam'].forEach(function (id) {
+      var n = document.getElementById(id); if (n) n.style.zIndex = full ? '2100' : '1000';
+    });
+    window.dispatchEvent(new Event('resize'));
+  }
+  document.getElementById('p3dfull').onclick = function () {
+    full = !full; setSize(); this.textContent = full ? '🗗 map' : '⤢ full';
+  };
+
+  var origin = null, meshes = {}, pos3 = {}, trails = {}, stars = {}, linkLines = null;
+  function toWorld(lat, lon, alt) {
+    if (!origin) origin = { lat: lat, lon: lon };
+    return new THREE.Vector3(
+      (lon - origin.lon) * 111320 * Math.cos(origin.lat * Math.PI / 180),
+      alt * VEX, -(lat - origin.lat) * 111320);
+  }
+  var satDone = false;
+  function satGround() {
+    if (satDone) return; satDone = true;
+    var z = 15, N = 5, TS = 256, P2 = Math.pow(2, z);
+    function tx(lon) { return ((lon + 180) / 360) * P2; }
+    function ty(lat) { var r = lat * Math.PI / 180;
+      return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * P2; }
+    var cx = tx(origin.lon), cy = ty(origin.lat);
+    var x0 = Math.floor(cx - N / 2), y0 = Math.floor(cy - N / 2);
+    var mX = 360 / P2 * 111320 * Math.cos(origin.lat * Math.PI / 180);
+    var mY = 360 / P2 * 111320;
+    ground.position.x = (x0 + N / 2 - cx) * mX;
+    ground.position.z = (y0 + N / 2 - cy) * mY;
+    var cv = document.createElement('canvas'); cv.width = N * TS; cv.height = N * TS;
+    var ctx = cv.getContext('2d'), done = 0;
+    function apply() {
+      ground.material = new THREE.MeshLambertMaterial({ map: new THREE.CanvasTexture(cv), color: 0xdddddd });
+    }
+    for (var i = 0; i < N; i++) for (var j = 0; j < N; j++) {
+      (function (i, j) {
+        var img = new Image(); img.crossOrigin = 'anonymous';
+        img.onload = function () { ctx.drawImage(img, i * TS, j * TS); if (++done === N * N) apply(); };
+        img.onerror = function () { if (++done === N * N) apply(); };
+        img.src = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'
+          + z + '/' + (y0 + j) + '/' + (x0 + i);
+      })(i, j);
+    }
+  }
+  function makeLabel(text) {
+    var cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
+    var tex = new THREE.CanvasTexture(cv);
+    function redraw(alt, spd) {
+      var x = cv.getContext('2d');
+      x.clearRect(0, 0, 256, 128);
+      x.fillStyle = 'rgba(0,10,4,0.72)'; x.fillRect(4, 6, 240, 116);
+      x.strokeStyle = '#00ff66'; x.lineWidth = 4; x.strokeRect(4, 6, 240, 116);
+      x.shadowColor = '#00ff66'; x.shadowBlur = 10;
+      x.font = 'bold 52px monospace'; x.fillStyle = '#eaffee'; x.fillText(text, 18, 62);
+      x.font = 'bold 40px monospace'; x.fillStyle = '#8dffb0';
+      x.fillText(Math.max(0, Math.round(alt || 0)) + 'm \u00b7 ' + Math.max(0, Math.round(spd || 0)) + 'm/s', 18, 108);
+      x.shadowBlur = 0;
+      tex.needsUpdate = true;
+    }
+    redraw(0);
+    var sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthTest: false, depthWrite: false }));
+    sp.renderOrder = 10;
+    return { sp: sp, redraw: redraw };
+  }
+  function buildDrone(label) {
+    var g = new THREE.Group();
+    g.rotation.order = 'YXZ';
+    var carbon = new THREE.MeshLambertMaterial({ color: 0x16181c });
+    var grey = new THREE.MeshLambertMaterial({ color: 0xb8bcc0 });
+    var plate = new THREE.Mesh(new THREE.BoxGeometry(14, 3, 14), carbon);
+    plate.castShadow = true; g.add(plate);
+    var batt = new THREE.Mesh(new THREE.BoxGeometry(9, 4, 12),
+      new THREE.MeshLambertMaterial({ color: 0x2e3440 }));
+    batt.position.y = 3.5; batt.castShadow = true; g.add(batt);
+    var led = new THREE.Mesh(new THREE.SphereGeometry(1.6, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0x00ff66 }));
+    led.position.set(0, 6, 0); g.add(led);
+    var props = [];
+    [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(function (s) {
+      var dir = new THREE.Vector3(s[0], 0.12, s[1]).normalize();
+      var arm = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.6, 26, 8), carbon);
+      arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      arm.position.copy(dir).multiplyScalar(12);
+      arm.castShadow = true; g.add(arm);
+      var motor = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 5, 10), carbon);
+      motor.position.set(s[0] * 17, 1.5, s[1] * 17);
+      motor.castShadow = true; g.add(motor);
+      var prop = new THREE.Group();
+      var b1 = new THREE.Mesh(new THREE.BoxGeometry(30, 0.5, 2.6),
+        new THREE.MeshLambertMaterial({ color: 0x0a0a0a }));
+      var b2 = b1.clone(); b2.rotation.y = Math.PI / 2;
+      prop.add(b1); prop.add(b2);
+      prop.position.set(s[0] * 17, 4.5, s[1] * 17);
+      g.add(prop); props.push(prop);
+    });
+    [-1, 1].forEach(function (s) {
+      var legF = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 12, 6), grey);
+      legF.rotation.z = s * 0.5; legF.position.set(s * 7, -6, 8); g.add(legF);
+      var legB = legF.clone(); legB.position.set(s * 7, -6, -8); g.add(legB);
+      var rail = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 26, 6), grey);
+      rail.rotation.x = Math.PI / 2; rail.position.set(s * 10, -10, 0); g.add(rail);
+    });
+    var gim = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 4),
+      new THREE.MeshLambertMaterial({ color: 0xd8b400 }));
+    gim.position.set(0, -3, 4); g.add(gim);
+    var camc = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 3, 8), carbon);
+    camc.rotation.x = Math.PI / 2; camc.position.set(0, -3.5, 6.5); g.add(camc);
+    var nose = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.2, 3),
+      new THREE.MeshBasicMaterial({ color: 0xff5500 }));
+    nose.position.set(0, 1, -8); g.add(nose);
+    var halo = new THREE.Mesh(new THREE.RingGeometry(24, 27, 40),
+      new THREE.MeshBasicMaterial({ color: 0x00ff66, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }));
+    halo.rotation.x = -Math.PI / 2; halo.position.y = -12; g.add(halo);
+    var beam = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -1, 0)]),
+      new THREE.LineBasicMaterial({ color: 0x00ff66, transparent: true, opacity: 0.7, depthWrite: false }));
+    beam.position.y = -12; g.add(beam);
+    var lab = makeLabel(label);
+    g.add(lab.sp);
+    var arrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 60, 0xffcc00, 24, 10);
+    arrow.visible = false;
+    scene.add(arrow);
+    g.userData = { props: props, led: led, halo: halo, beam: beam, label: lab, arrow: arrow };
+    scene.add(g);
+    return g;
+  }
+
+  var wind = { spd: 0, dir: 0 };
+  function lerpAng(a, b, t) {
+    var d = b - a;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    return a + d * t;
+  }
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/telemetry',
+    messageType: 'swarm_interfaces/msg/DroneTelemetry' }).subscribe(function (m) {
+    var g = meshes[m.label] || (meshes[m.label] = buildDrone(m.label));
+    var u = g.userData;
+    var p = toWorld(m.lat, m.lon, m.alt);
+    satGround();
+    pos3[m.label] = p;
+    var now = Date.now() / 1000;
+    if (u.lastP) {
+      var dt = Math.max(0.2, now - u.lastT);
+      var v = new THREE.Vector3((p.x - u.lastP.x) / dt, (p.y - u.lastP.y) / dt, (p.z - u.lastP.z) / dt);
+      u.vel = u.vel ? u.vel.lerp(v, 0.5) : v;
+      u.climb = (m.alt - (u.lastAlt || m.alt)) / dt;
+    }
+    var spdNow = u.vel ? Math.hypot(u.vel.x, u.vel.z) : 0;
+    if (u.label) u.label.redraw(m.alt, spdNow);
+    u.lastP = p.clone(); u.lastT = now; u.lastAlt = m.alt; u.lastSeen = now;
+    u.target = p;
+    u.sRoll = -(m.roll || 0); u.sPitch = m.pitch || 0; u.sYaw = -(m.yaw || 0);
+    wind.spd = m.wind_speed || wind.spd; wind.dir = m.wind_dir || wind.dir;
+    var col = m.battery_pct > 50 ? 0x00ff66 : m.battery_pct > 20 ? 0xffaa00 : 0xff2222;
+    u.led.material.color.setHex(col); u.halo.material.color.setHex(col);
+    u.beam.material.color.setHex(col);
+    var t = trails[m.label] || (trails[m.label] = []);
+    if (!t.length || t[t.length - 1].distanceTo(p) > 8) { t.push(p.clone()); if (t.length > 300) t.shift(); }
+    if (u.trail) { u.trail.geometry.setFromPoints(t); }
+    else {
+      u.trail = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(t),
+        new THREE.LineBasicMaterial({ color: 0x00ff66, transparent: true, opacity: 0.35 }));
+      scene.add(u.trail);
+    }
+    var st = u.streak || (u.streak = []);
+    st.push(p.clone()); if (st.length > 20) st.shift();
+    if (u.streakLine) { u.streakLine.geometry.setFromPoints(st); }
+    else {
+      u.streakLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(st),
+        new THREE.LineBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.95 }));
+      scene.add(u.streakLine);
+    }
+  });
+
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests',
+    messageType: 'swarm_interfaces/msg/TaskRequest' }).subscribe(function (m) {
+    ringCoords[m.task_id] = [m.lat, m.lon];
+    if (stars[m.task_id]) return;
+    var p = toWorld(m.lat, m.lon, 0);
+    var s = new THREE.Mesh(new THREE.OctahedronGeometry(40),
+      new THREE.MeshBasicMaterial({ color: 0xff22aa }));
+    s.position.set(p.x, 80, p.z);
+    scene.add(s);
+    scene.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p.x, 0, p.z), new THREE.Vector3(p.x, 80, p.z)]),
+      new THREE.LineBasicMaterial({ color: 0xff22aa })));
+    stars[m.task_id] = s;
+  });
+  var ringCoords = {}, rings = {};
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_assignments',
+    messageType: 'swarm_interfaces/msg/TaskAssignment' }).subscribe(function (m) {
+    var r = m.orbit_radius || 0;
+    if (r <= 0 || rings[m.task_id] || !ringCoords[m.task_id]) return;
+    rings[m.task_id] = true;
+    var c = toWorld(ringCoords[m.task_id][0], ringCoords[m.task_id][1], 30);
+    var pts = [];
+    for (var i = 0; i <= 64; i++) {
+      var a = 2 * Math.PI * i / 64;
+      pts.push(new THREE.Vector3(c.x + r * Math.cos(a), c.y, c.z + r * Math.sin(a)));
+    }
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: 0xff22aa, transparent: true, opacity: 0.8 })));
+  });
+
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/mesh_topology',
+    messageType: 'swarm_interfaces/msg/MeshTopology' }).subscribe(function (m) {
+    if (linkLines) scene.remove(linkLines);
+    var pts = [];
+    (m.edges || []).forEach(function (e) {
+      var a = e.label_a ?? e.a, b = e.label_b ?? e.b;
+      if (pos3[a] && pos3[b]) pts.push(pos3[a], pos3[b]);
+    });
+    var cols = [];
+    (m.edges || []).forEach(function (e) {
+      var a = e.label_a ?? e.a, b = e.label_b ?? e.b;
+      if (pos3[a] && pos3[b]) {
+        var d = e.distance_km ?? 0;
+        var c = d < 1.0 ? new THREE.Color(0x2299ff) : d < 1.6 ? new THREE.Color(0xffaa00) : new THREE.Color(0xff2222);
+        cols.push(c.r, c.g, c.b, c.r, c.g, c.b);
+      }
+    });
+    var geo = new THREE.BufferGeometry().setFromPoints(pts);
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+    linkLines = new THREE.LineSegments(geo,
+      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.5 }));
+    scene.add(linkLines);
+  });
+
+  var NS = 36, sp = new Float32Array(NS * 6), sv = [];
+  for (var wi = 0; wi < NS; wi++) sv.push({
+    x: (Math.random() - 0.5) * 6000, y: 60 + Math.random() * 500, z: (Math.random() - 0.5) * 6000 });
+  var sGeo = new THREE.BufferGeometry();
+  sGeo.setAttribute('position', new THREE.BufferAttribute(sp, 3));
+  var streaks = new THREE.LineSegments(sGeo,
+    new THREE.LineBasicMaterial({ color: 0xaaddff, transparent: true, opacity: 0.0, depthWrite: false }));
+  scene.add(streaks);
+  function stepWind(dt) {
+    if (wind.spd <= 0.1) { streaks.material.opacity = 0; return; }
+    var go = (wind.dir + 180) * Math.PI / 180;
+    var vx = Math.sin(go) * wind.spd * 12, vz = -Math.cos(go) * wind.spd * 12;
+    for (var i = 0; i < NS; i++) {
+      var s = sv[i];
+      s.x += vx * dt; s.z += vz * dt;
+      if (s.x > 3000) s.x -= 6000; if (s.x < -3000) s.x += 6000;
+      if (s.z > 3000) s.z -= 6000; if (s.z < -3000) s.z += 6000;
+      sp[i * 6] = s.x; sp[i * 6 + 1] = s.y; sp[i * 6 + 2] = s.z;
+      sp[i * 6 + 3] = s.x - vx * 0.5; sp[i * 6 + 4] = s.y; sp[i * 6 + 5] = s.z - vz * 0.5;
+    }
+    sGeo.attributes.position.needsUpdate = true;
+    streaks.material.opacity = Math.min(0.5, wind.spd * 0.08);
+  }
+
+  var theta = 0.9, phi = 0.9, radius = 2600, drag = null, pan = false;
+  var targetOff = new THREE.Vector3(), follow = null;
+  var el = ren.domElement;
+  el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  el.addEventListener('mousedown', function (e) {
+    if (e.button === 2) pan = true; else drag = { x: e.clientX, y: e.clientY };
+  });
+  window.addEventListener('mouseup', function () { drag = null; pan = false; });
+  window.addEventListener('mousemove', function (e) {
+    if (drag) {
+      theta -= (e.clientX - drag.x) * 0.005;
+      phi = Math.min(1.45, Math.max(0.15, phi - (e.clientY - drag.y) * 0.005));
+      drag = { x: e.clientX, y: e.clientY };
+    } else if (pan) {
+      var s = radius * 0.0012;
+      targetOff.x -= e.movementX * s * Math.cos(theta);
+      targetOff.z += e.movementX * s * Math.sin(theta);
+      targetOff.y += e.movementY * s;
+    }
+  });
+  el.addEventListener('wheel', function (e) {
+    radius = Math.min(15000, Math.max(200, radius * (1 + e.deltaY * 0.0012)));
+    e.preventDefault();
+  }, { passive: false });
+  el.addEventListener('dblclick', function () {
+    var keys = Object.keys(meshes);
+    if (!keys.length) return;
+    follow = (follow === null) ? keys[0] : keys[(keys.indexOf(follow) + 1) % keys.length];
+    radius = Math.min(radius, 1500);
+  });
+
+  var lastF = Date.now() / 1000, fc = 0;
+  (function animate() {
+    requestAnimationFrame(animate);
+    var nf = Date.now() / 1000, dt = Math.min(0.08, nf - lastF); lastF = nf;
+    if (!drag) theta += 0.0004;
+    var sScale = THREE.MathUtils.clamp(radius / 1200, 1.2, 2.4);
+    Object.keys(meshes).forEach(function (k, idx) {
+      var g = meshes[k], u = g.userData;
+      if (!u.dp) { u.dp = (u.target || new THREE.Vector3()).clone(); u.dv = new THREE.Vector3(); }
+      if (u.vel && u.lastSeen && (nf - u.lastSeen) < 3) {
+        u.dr = (u.dr || u.target.clone()).addScaledVector(u.vel, dt);
+      } else {
+        if (u.vel) u.vel.multiplyScalar(0.9);
+        u.dr = (u.dr || u.target || g.position).clone();
+      }
+      var kS = 3.0, cS = 2 * Math.sqrt(3.0);
+      var acc = u.dr.clone().sub(u.dp).multiplyScalar(kS).addScaledVector(u.dv, -cS);
+      u.dv.addScaledVector(acc, dt);
+      u.dp.addScaledVector(u.dv, dt);
+      g.position.copy(u.dp);
+      var dLab = cam.position.distanceTo(g.position);
+      var ls = THREE.MathUtils.clamp(dLab * 0.05, 26, 150);
+      u.label.sp.scale.set(ls, ls * 0.5, 1);
+      u.label.sp.position.y = ls * 0.6;
+      var hv = Math.hypot(u.dv.x, u.dv.z);
+      // attitude-first: streamed ArduPilot physics at 5 Hz is the primary source
+      var yawT = u.sYaw, rollT = u.sRoll || 0, pitchT = u.sPitch || 0;
+      if (hv > 8) yawT = Math.atan2(-u.dv.x, -u.dv.z);
+      u.vYaw = lerpAng(u.vYaw === undefined ? yawT : u.vYaw, yawT, 0.35);
+      u.vRoll = (u.vRoll === undefined ? 0 : u.vRoll * 0.65 + rollT * 0.35);
+      u.vPitch = (u.vPitch === undefined ? 0 : u.vPitch * 0.65 + pitchT * 0.35);
+      g.rotation.set(u.vPitch, u.vYaw, u.vRoll);
+      g.scale.setScalar(sScale);
+      u.props.forEach(function (pr) {
+        pr.rotation.y += 0.9 + Math.min(1.5, Math.abs(u.climb || 0) * 0.15);
+      });
+      u.beam.scale.y = Math.max(1, g.position.y / sScale);
+      if (u.arrow) {
+        var hvel = new THREE.Vector3(u.vel ? u.vel.x : 0, 0, u.vel ? u.vel.z : 0);
+        var slen = hvel.length();
+        if (slen > 1.0) {
+          hvel.normalize();
+          u.arrow.visible = true;
+          u.arrow.position.set(g.position.x, g.position.y + 8 * sScale, g.position.z);
+          u.arrow.setDirection(hvel);
+          u.arrow.setLength(Math.min(300, 50 + slen * 15), 24, 10);
+        } else { u.arrow.visible = false; }
+      }
+    });
+    stepWind(dt);
+    if (++fc % 60 === 0) {
+      var ws = document.getElementById('windspan');
+      if (ws) ws.textContent = 'wind ' + wind.spd.toFixed(1) + ' m/s';
+    }
+    var baseV = (follow && meshes[follow]) ? meshes[follow].position
+      : (origin ? toWorld(origin.lat, origin.lon, 0) : new THREE.Vector3());
+    var t = baseV.clone().add(targetOff);
+    cam.position.set(
+      t.x + radius * Math.sin(phi) * Math.cos(theta),
+      t.y + radius * Math.cos(phi),
+      t.z + radius * Math.sin(phi) * Math.sin(theta));
+    cam.lookAt(t);
+    ren.render(scene, cam);
+  })();
+})();
+
+</script>
+<script>
+// ---- M3.5a: Human-in-the-Loop — auto sightings need a human click ----
+(function () {
+  if (!window.L || !window.ROSLIB || !window.map) return;
+  var st = document.createElement('style');
+  st.textContent = '@keyframes suggpulse{0%{transform:scale(1);opacity:1}50%{transform:scale(1.7);opacity:.55}100%{transform:scale(1);opacity:1}}.suggstar{width:16px;height:16px;background:orange;border:2px solid #fff;border-radius:50%;animation:suggpulse 1.2s infinite}';
+  document.head.appendChild(st);
+  var reqTopic = new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests',
+    messageType: 'swarm_interfaces/msg/TaskRequest' });
+  var sugg = {};
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests',
+    messageType: 'swarm_interfaces/msg/TaskRequest' }).subscribe(function (m) {
+    var id = m.task_id;
+    if (!id || id.indexOf('RESCUE-') !== 0 || sugg[id]) return;
+    sugg[id] = L.marker([m.lat, m.lon], {
+      icon: L.divIcon({ className: '', html: '<div class="suggstar"></div>', iconSize: [16, 16] })
+    }).addTo(map);
+    sugg[id].bindPopup('<b>SUGGESTED ' + id + '</b><br>YOLO sighting — human confirmation required<br>' +
+      '<button onclick="confirmSugg(\'' + id + '\',' + m.lat + ',' + m.lon + ')">★ Confirm dispatch</button>');
+  });
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_assignments',
+    messageType: 'swarm_interfaces/msg/TaskAssignment' }).subscribe(function (m) {
+    if (sugg[m.task_id]) { sugg[m.task_id].remove(); delete sugg[m.task_id]; }
+  });
+  window.confirmSugg = function (id, lat, lon) {
+    reqTopic.publish(new ROSLIB.Message({ task_id: id, lat: lat, lon: lon }));
+  };
+})();
+</script>
+
+
+
+<script>
+// ---- M3.6: SWARM converge + perimeter ring (canonical) ----
+(function () {
+  if (!window.L || !window.ROSLIB || !window.map) return;
+  var btn = document.createElement('button');
+  btn.textContent = '⋆ SWARM converge';
+  btn.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1000;background:#032;color:#0f0;border:1px solid #0f0;border-radius:4px;font-family:monospace;padding:4px 12px;cursor:pointer';
+  document.body.appendChild(btn);
+  var armed = false, n = 0, coords = {};
+  var req = new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests', messageType: 'swarm_interfaces/msg/TaskRequest' });
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests', messageType: 'swarm_interfaces/msg/TaskRequest' })
+    .subscribe(function (m) { coords[m.task_id] = [m.lat, m.lon]; });
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_assignments', messageType: 'swarm_interfaces/msg/TaskAssignment' })
+    .subscribe(function (m) {
+      var r = m.orbit_radius || 0; if (r <= 0) return;
+      var c = coords[m.task_id]; if (!c || map['_ring_' + m.task_id]) return;
+      map['_ring_' + m.task_id] = L.circle(c, { radius: r, color: '#f0f', dashArray: '6 6', fill: false, weight: 1.5 }).addTo(map);
+    });
+  btn.onclick = function () {
+    armed = !armed;
+    btn.style.background = armed ? '#0f0' : '#032';
+    btn.style.color = armed ? '#000' : '#0f0';
+    btn.textContent = armed ? '⋆ click map to CONVERGE the swarm' : '⋆ SWARM converge';
+  };
+  map.on('click', function (e) {
+    if (!armed) return;
+    n++;
+    req.publish(new ROSLIB.Message({ task_id: 'SWARM-' + n, lat: e.latlng.lat, lon: e.latlng.lng, description: 'swarm converge' }));
+    armed = false; btn.style.background = '#032'; btn.style.color = '#0f0'; btn.textContent = '⋆ SWARM converge';
+  });
+})();
+</script>
+<script>
+// ---- M3.6.1: mission-state banner ----
+(function () {
+  if (!window.ROSLIB) return;
+  var b = document.createElement('div');
+  b.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1001;display:none;background:rgba(0,20,8,.9);border:1px solid #0f0;border-radius:4px;color:#0f0;font:13px monospace;padding:6px 14px;';
+  document.body.appendChild(b);
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/mission_event', messageType: 'swarm_interfaces/msg/MissionEvent' })
+    .subscribe(function (m) {
+      b.style.display = 'block';
+      if (m.event === 'PERIMETER_FORMED') {
+        b.style.borderColor = '#0f0'; b.style.color = '#0f0';
+        b.textContent = '⬢ PERIMETER FORMED · ' + m.task_id + ' · ' + m.detail;
+      } else if (m.event === 'PERIMETER_DEGRADED') {
+        b.style.borderColor = '#fa0'; b.style.color = '#fa0';
+        b.textContent = '⬢ PERIMETER DEGRADED · ' + m.task_id + ' · ' + m.detail;
+      } else {
+        b.style.borderColor = '#888'; b.style.color = '#bbb';
+        b.textContent = '⬢ RELEASED · ' + m.task_id + ' · ' + m.detail;
+      }
+    });
+})();
+</script>
+
+<script>
+// ---- M3.7: INTERCEPT moving target + live track marker ----
+(function () {
+  if (!window.L || !window.ROSLIB || !window.map) return;
+  var btn = document.createElement('button');
+  btn.textContent = '⋆ INTERCEPT moving target';
+  btn.style.cssText = 'position:absolute;top:44px;left:50%;transform:translateX(-50%);z-index:1000;background:#300;color:#f66;border:1px solid #f00;border-radius:4px;font-family:monospace;padding:4px 12px;cursor:pointer';
+  document.body.appendChild(btn);
+  var armed = false, n = 0;
+  var req = new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests', messageType: 'swarm_interfaces/msg/TaskRequest' });
+  btn.onclick = function () {
+    armed = !armed;
+    btn.style.background = armed ? '#f00' : '#300';
+    btn.style.color = armed ? '#000' : '#f66';
+    btn.textContent = armed ? '⋆ click map to ASSIGN intercept' : '⋆ INTERCEPT moving target';
+  };
+  map.on('click', function (e) {
+    if (!armed) return;
+    n++;
+    req.publish(new ROSLIB.Message({ task_id: 'INTERCEPT-' + n, lat: e.latlng.lat, lon: e.latlng.lng, description: 'intercept mover' }));
+    armed = false; btn.style.background = '#300'; btn.style.color = '#f66'; btn.textContent = '⋆ INTERCEPT moving target';
+  });
+  var mk = null, trail = [];
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/target_track', messageType: 'swarm_interfaces/msg/TargetTrack' }).subscribe(function (m) {
+    var ll = [m.lat, m.lon];
+    if (!mk) mk = L.circleMarker(ll, { radius: 7, color: '#f00', fillColor: '#f00', fillOpacity: 0.9 }).addTo(map);
+    else mk.setLatLng(ll);
+    trail.push(ll); if (trail.length > 300) trail.shift();
+    if (map._tline) map.removeLayer(map._tline);
+    map._tline = L.polyline(trail, { color: '#f00', weight: 2, dashArray: '4 4' }).addTo(map);
+  });
+})();
+</script>
+<script>
+// ---- M3.7+: 3D quarry marker + live intercept ring + trail ----
+(function () {
+  function wait() {
+    if (!window.SW3 || !window.ROSLIB || !window.THREE) { setTimeout(wait, 500); return; }
+    var scene = window.SW3.scene, toWorld = window.SW3.toWorld;
+    var mk = new THREE.Mesh(new THREE.OctahedronGeometry(30),
+      new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+    var ring = null, trailLine = null, trailPts = [], seen = false;
+    new ROSLIB.Topic({ ros: ros, name: '/swarm/target_track',
+      messageType: 'swarm_interfaces/msg/TargetTrack' }).subscribe(function (m) {
+      var p = toWorld(m.lat, m.lon, 20);
+      if (!seen) { scene.add(mk); seen = true; }
+      mk.position.copy(p);
+      if (!ring) {
+        var pts = [];
+        for (var i = 0; i <= 64; i++) {
+          var a = 2 * Math.PI * i / 64;
+          pts.push(new THREE.Vector3(300 * Math.cos(a), 0, 300 * Math.sin(a)));
+        }
+        ring = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+          new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 }));
+        scene.add(ring);
+      }
+      ring.position.set(p.x, 30 * 12, p.z);
+      trailPts.push(p.clone()); if (trailPts.length > 300) trailPts.shift();
+      if (trailLine) scene.remove(trailLine);
+      trailLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(trailPts),
+        new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.6 }));
+      scene.add(trailLine);
+    });
+  }
+  wait();
+})();
+</script>

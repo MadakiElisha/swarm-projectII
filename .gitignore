@@ -1,0 +1,27 @@
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.pt
+*.onnx
+*.engine
+nohup.out
+*.tlog
+*.log
+eeprom.bin
+ros2_ws/src/swarm_perception/assets/
+
+# hygiene pass
+build/
+install/
+log/
+logs/
+*.BIN
+*Zone.Identifier
+*.v5-bak
+reports/
+__pycache__/
+*.pyc

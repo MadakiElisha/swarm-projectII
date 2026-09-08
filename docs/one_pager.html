@@ -1,0 +1,70 @@
+<!doctype html><html><head><meta charset="utf-8"><title>SWARM-PROJECT II — One-Page Overview</title>
+<style>
+ @page{size:A4;margin:8mm}
+ body{font:8.6px/1.35 'Helvetica',Arial,sans-serif;color:#111;column-count:2;column-gap:6mm}
+ h1{font-size:17px;margin:0;column-span:all}
+ .tag{font-size:9.5px;color:#333;column-span:all;margin:1px 0 4px;border-bottom:2px solid #0a7;padding-bottom:3px}
+ h2{font-size:10px;margin:6px 0 2px;color:#0a7;border-bottom:1px solid #0a7}
+ p{margin:2px 0} ul{margin:2px 0 2px 12px;padding:0} li{margin:1px 0}
+ table{width:100%;border-collapse:collapse;font-size:8.2px;margin:2px 0}
+ td,th{border:1px solid #999;padding:1.5px 3px;text-align:left;vertical-align:top}
+ th{background:#e8f5ef}
+ code{font:8.2px monospace;background:#eee;padding:0 2px}
+ .pill{display:inline-block;background:#0a7;color:#fff;border-radius:7px;padding:0 6px;font-size:7.8px;margin-right:3px}
+ .pill.n{background:#c60}
+ .foot{font-size:7.8px;color:#555;margin-top:4px}
+ .break{break-inside:avoid}
+</style></head><body>
+<h1>SWARM-PROJECT II</h1>
+<div class="tag">A decentralized, vendor-agnostic cognitive drone swarm — five multirotors, <b>no central brain</b>, real ArduPilot physics, operator-grade 2D/3D GCS, regression-gated. · MIT · Madaki Elisha · stefannelisha@gmail.com · github.com/MadakiElisha/swarm-projectII</div>
+
+<h2>1 · Essence</h2>
+<p>Each drone is an intelligent actor: it bids on tasks using distance + wind-aware energy belief, vetoes unsafe work, relinquishes and hands over when depleted, climbs to heal mesh links, and pursues moving targets from shared data. Coordination is a <b>replicated contract-net auction with an elected, kill-tolerant leader</b> — kill it and a standby promotes in ~3 s with mirrored state. Everything runs on ArduPilot SITL today and is shaped for real hardware via a <code>VehicleAdapter</code> backend abstraction (sim↔real swap = one parameter; a proprietary adapter implements the same interface and the stack above never changes).</p>
+
+<h2>2 · Architecture</h2>
+<table class="break"><tr><th>Layer</th><th>Implementation</th></tr>
+<tr><td>Transport</td><td>ROS 2 Jazzy over <b>Zenoh</b> (peer mode, mesh-ready, discovery-light)</td></tr>
+<tr><td>Flight control</td><td>ArduPilot (SITL now; Pixhawk 4.5+ next) via <code>MavlinkBackend</code></td></tr>
+<tr><td>Cognition</td><td>per-drone agents: battery-margin vetoes, relinquish + handover, climb-to-heal</td></tr>
+<tr><td>Coordination</td><td>contract-net auction, replicated + elected leader (<code>swarm_agents</code>)</td></tr>
+<tr><td>Mesh</td><td>distance-derived topology; reachability-checked bids (<code>swarm_mesh</code>)</td></tr>
+<tr><td>Perception</td><td>namespaced YOLO per drone <code>/swarm/Dx/camera/compressed</code>; <b>detections-only</b> shared bus</td></tr>
+<tr><td>GCS</td><td>Leaflet 2D + three.js 3D ops panel, no build step, rosbridge-fed</td></tr></table>
+<p><b>Decentralization audit:</b> execution, cognition, pursuit = per-drone; leader = elected/replicated/kill-tolerant; rosbridge + GCS = operator-side only, never an autonomy dependency.</p>
+
+<h2>3 · Mission pipeline</h2>
+<p><code>detect → auction → converge → declare → pursue → release</code></p>
+<ul>
+<li><b>Detect:</b> YOLO person sightings → amber RESCUE suggestions; human confirms (HITL).</li>
+<li><b>Auction:</b> bids = distance + wind-aware battery belief; mesh reachability gate; unsafe bids vetoed locally.</li>
+<li><b>Converge:</b> simultaneous lift, rotating 300 m ring, staggered altitudes, GO/NO-GO preflight.</li>
+<li><b>Declare:</b> drones self-report ENROUTE / ON_STATION / RELEASED (radial band test); leader emits exactly one <code>PERIMETER_FORMED / DEGRADED / RELEASED</code> event → GCS banner + logs.</li>
+<li><b>Pursue:</b> INTERCEPT re-centers the ring on the live <code>TargetTrack</code>; two lead-pursuit cutters; stale-track orbit hold.</li>
+<li><b>Release:</b> human command, battery relinquish, or hold expiry → RTL.</li>
+</ul>
+
+<h2>4 · Use cases (verified in SITL)</h2>
+<table class="break"><tr><th>Case</th><th>Trigger</th><th>Verified behavior</th></tr>
+<tr><td>Flood / disaster SAR</td><td>YOLO → confirm</td><td>nearest eligible drone; wind-budgeted leg; low-battery handover</td></tr>
+<tr><td>Perimeter / static intercept</td><td>1 click</td><td>five lift as one; FORMED banner; auto-release RTL</td></tr>
+<tr><td>Moving-target pursuit</td><td>1 click (mover auto-starts)</td><td>ring chases quarry; cutters ahead; stale hold</td></tr></table>
+<p>Extensible by task prefix + detector class: FIRE-PERIMETER, MARITIME, RECON, DELIVER, INSPECT, VANTAGE…</p>
+
+<h2>5 · Visualization</h2>
+<ul><li><b>2D:</b> satellite map, live battery roster, HITL stars, perimeter rings, red quarry + dashed chase trail.</li>
+<li><b>3D:</b> X500 airframes, 5 Hz attitude-first (YXZ-correct), velocity arrows, comet streaks, alt/speed chips, battery halos + ground beams, legend, mission banner, live 3D quarry + moving ring, follow-cam, logarithmic depth buffer.</li></ul>
+
+<h2>6 · Quality gates</h2>
+<ul><li><code>scripts/regression.sh</code> — self-flying acceptance gate: C1 telemetry×5 · C2 mesh links · C3 five replicas · C4 five assignments · C5 PERIMETER_FORMED &lt;240 s @ 120 m band · C6 mover auto-start; emits <code>reports/run_*.png</code> acceptance graphs + run history.</li>
+<li>pytest cores; boundary validation on every inbound field; crash-proof handlers; abort channel; two-layer watchdogs; idempotent auctions (lossy-link-safe retries).</li>
+<li>One-command ops: <code>scripts/swarm_up.sh</code> / <code>swarm_down.sh</code> with health summary.</li></ul>
+
+<h2>7 · Hardware plan</h2>
+<p><b>Per drone:</b> Pixhawk (ArduPilot 4.5+) + Jetson Orin Nano + CSI cam + mesh radio (802.11s/batman-adv or Mesh Rider) + 915 MHz C2 failsafe. <b>Bandwidth rule:</b> detections cross the mesh; video is pulled selectively (RTSP/WebRTC), never on the ROS bus. <b>Phasing:</b> P1 bench (1 real FC + 4 SITL, one launch file, two worlds) → P2 1-real + 4-SITL flight → P3 3 real → P4 5-real field mesh test.</p>
+
+<h2>8 · Roadmap &amp; safety</h2>
+<p><span class="pill">DONE</span>fleet + mesh + auction · SAR/HITL · wind budgets · self-healing coordination · synchronized perimeter · mission-state feedback · pursuit · namespaced perception · viz arc · regression gate · docs.</p>
+<p><span class="pill n">NEXT</span>consolidation pass · deterministic mission-math tests · safety pack (geofence, RTL-on-link-loss, E-stop) · radio realism / NS-3 · hardware P1–P4 · CesiumJS photoreal · advisory NNs · VisDrone eval.</p>
+<p><b>Safety:</b> GO/NO-GO preflight, battery vetoes, relinquish in sim; geofence, RC override, VLOS-first (BVLOS under waiver) on hardware.</p>
+<div class="foot">SWARM-PROJECT II · ROS 2 Jazzy · Zenoh · ArduPilot · Leaflet/three.js · YOLOv8 · built with gratitude on those communities.</div>
+</body></html>
