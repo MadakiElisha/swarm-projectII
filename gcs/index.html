@@ -205,48 +205,91 @@ window.cmd = cmd;
 </script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script>
-// ---- M4 v9: X500-style airframes + clean stage ----
+// ============================================================================
+// 3D OPS PANEL: X500-style airframes, satellite ground, live telemetry viz
+// ============================================================================
+// BEHAVIOR IS FROZEN: consolidation pass 3/3 is a readability rewrite.
+// Every geometry, color, animation timing, and camera behavior is identical
+// to the v9 implementation; the regression gate proves visual equivalence.
+// ============================================================================
+
 if (window.THREE) (function () {
-  var VEX = 12;
+
+  // --- constants ---
+  var VEX = 12;                          // vertical exaggeration (altitude scale)
+  var PANEL_W = 480, PANEL_H = 340;      // default panel dimensions
+  var SKY_TOP = '#2a7ab8', SKY_MID = '#9cc4d4', SKY_BOT = '#dfe8e2';
+  var FOG_COLOR = 0xdfe7e0, FOG_NEAR = 7000, FOG_FAR = 22000;
+  var SHADOW_MAP_SIZE = 1024;
+  var SHADOW_CAM_BOUND = 6000, SHADOW_CAM_FAR = 15000, SHADOW_BIAS = -0.0008, SHADOW_NORMAL_BIAS = 0.02;
+  var BASE_PLANE_SIZE = 80000, BASE_PLANE_COLOR = 0x8fa08a, BASE_PLANE_Y = -20;
+  var SAT_GROUND_SIZE = 6080, SAT_GROUND_COLOR = 0xdddddd;
+  var CAM_FOV = 50, CAM_NEAR = 10, CAM_FAR = 90000;
+  var SAT_ZOOM = 15, SAT_GRID_N = 5, SAT_TILE_SIZE = 256;
+  var LABEL_W = 256, LABEL_H = 128, LABEL_FONT_MAIN = 52, LABEL_FONT_SUB = 40;
+  var TRAIL_MAX = 300, TRAIL_MIN_DIST = 8;
+  var STREAK_MAX = 20;
+  var WIND_STREAK_COUNT = 36, WIND_SCALE = 12, WIND_OPACITY_SCALE = 0.08;
+  var ORBIT_SPEED = 0.0004, PAN_SCALE = 0.0012, ZOOM_SCALE = 0.0012;
+  var CAM_RADIUS_MIN = 200, CAM_RADIUS_MAX = 15000, CAM_FOLLOW_RADIUS = 1500;
+  var SPRING_K = 3.0, SPRING_C = 2 * Math.sqrt(3.0);
+  var ATTITUDE_YAW_LERP = 0.35, ATTITUDE_ROLL_PITCH_LERP = 0.35;
+  var PROP_SPIN_BASE = 0.9, PROP_SPIN_CLIMB_SCALE = 0.15;
+  var ARROW_MIN_SPEED = 1.0, ARROW_MAX_LENGTH = 300, ARROW_BASE_LENGTH = 50, ARROW_SPEED_SCALE = 15;
+  var BATT_GREEN = 0x00ff66, BATT_ORANGE = 0xffaa00, BATT_RED = 0xff2222;
+  var BATT_THRESHOLD_HIGH = 50, BATT_THRESHOLD_LOW = 20;
+
+  // --- panel HTML ---
   document.body.insertAdjacentHTML('beforeend',
     '<div id="p3d" style="position:absolute;left:10px;top:10px;z-index:999;width:480px;background:rgba(0,0,0,.88);border:1px solid #0f0;border-radius:6px;overflow:hidden">' +
     '<div id="p3dhdr" style="color:#0f0;font:12px monospace;padding:2px 6px">3D OPS · drag orbit · right-drag pan · wheel zoom · dblclick follow<span id="windspan" style="margin-left:10px;color:#7fdfff"></span>' +
     '<button id="p3dfull" style="float:right;background:#032;color:#0f0;border:1px solid #0f0;border-radius:4px;font-family:monospace;cursor:pointer">⤢ full</button></div>' +
     '<div id="p3dc" style="width:480px;height:340px"></div></div>');
-  var W = 480, H = 340, full = false;
+
+  // --- scene setup ---
+  var W = PANEL_W, H = PANEL_H, full = false;
   var scene = new THREE.Scene();
   var skyc = document.createElement('canvas'); skyc.width = 2; skyc.height = 256;
   var sx = skyc.getContext('2d');
   var grd = sx.createLinearGradient(0, 0, 0, 256);
-  grd.addColorStop(0, '#2a7ab8'); grd.addColorStop(0.55, '#9cc4d4'); grd.addColorStop(1, '#dfe8e2');
+  grd.addColorStop(0, SKY_TOP); grd.addColorStop(0.55, SKY_MID); grd.addColorStop(1, SKY_BOT);
   sx.fillStyle = grd; sx.fillRect(0, 0, 2, 256);
   scene.background = new THREE.CanvasTexture(skyc);
-  scene.fog = new THREE.Fog(0xdfe7e0, 7000, 22000);
+  scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR);
   scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+
+  // --- lighting ---
   var dl = new THREE.DirectionalLight(0xffffff, 1.0);
   dl.position.set(3000, 5000, 2500);
   dl.castShadow = true;
-  dl.shadow.mapSize.set(1024, 1024);
-  dl.shadow.camera.left = -6000; dl.shadow.camera.right = 6000;
-  dl.shadow.camera.top = 6000; dl.shadow.camera.bottom = -6000;
-  dl.shadow.camera.far = 15000;
-  dl.shadow.bias = -0.0008;
-  if (dl.shadow.normalBias !== undefined) dl.shadow.normalBias = 0.02;
+  dl.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+  dl.shadow.camera.left = -SHADOW_CAM_BOUND; dl.shadow.camera.right = SHADOW_CAM_BOUND;
+  dl.shadow.camera.top = SHADOW_CAM_BOUND; dl.shadow.camera.bottom = -SHADOW_CAM_BOUND;
+  dl.shadow.camera.far = SHADOW_CAM_FAR;
+  dl.shadow.bias = SHADOW_BIAS;
+  if (dl.shadow.normalBias !== undefined) dl.shadow.normalBias = SHADOW_NORMAL_BIAS;
   scene.add(dl);
-  var basePlane = new THREE.Mesh(new THREE.PlaneGeometry(80000, 80000),
-    new THREE.MeshLambertMaterial({ color: 0x8fa08a }));
-  basePlane.rotation.x = -Math.PI / 2; basePlane.position.y = -20;
+
+  // --- ground planes ---
+  var basePlane = new THREE.Mesh(new THREE.PlaneGeometry(BASE_PLANE_SIZE, BASE_PLANE_SIZE),
+    new THREE.MeshLambertMaterial({ color: BASE_PLANE_COLOR }));
+  basePlane.rotation.x = -Math.PI / 2; basePlane.position.y = BASE_PLANE_Y;
   scene.add(basePlane);
-  var ground = new THREE.Mesh(new THREE.PlaneGeometry(6080, 6080),
-    new THREE.MeshLambertMaterial({ color: 0xdddddd }));
+
+  var ground = new THREE.Mesh(new THREE.PlaneGeometry(SAT_GROUND_SIZE, SAT_GROUND_SIZE),
+    new THREE.MeshLambertMaterial({ color: SAT_GROUND_COLOR }));
   ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
   scene.add(ground);
-  var cam = new THREE.PerspectiveCamera(50, W / H, 10, 90000);
+
+  // --- camera & renderer ---
+  var cam = new THREE.PerspectiveCamera(CAM_FOV, W / H, CAM_NEAR, CAM_FAR);
   var ren = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
   ren.shadowMap.enabled = true; ren.shadowMap.type = THREE.PCFSoftShadowMap;
   ren.setSize(W, H);
   document.getElementById('p3dc').appendChild(ren.domElement);
   window.SW3 = { scene: scene, toWorld: toWorld };
+
+  // --- legend overlay ---
   var leg = document.createElement('div');
   leg.style.cssText = 'position:absolute;left:8px;bottom:52px;z-index:5;background:rgba(0,8,4,.78);border:1px solid #0f0;border-radius:4px;color:#9fffc0;font:11px monospace;padding:6px 8px;line-height:1.6;pointer-events:none;white-space:nowrap';
   leg.innerHTML = '<b style="color:#eaffee">SWARM-PROJECT II</b> · 5-UAS decentralized SAR · SITL · ' +
@@ -255,9 +298,10 @@ if (window.THREE) (function () {
     'mesh <span style="color:#29f">ok</span>/<span style="color:#fa0">deg</span>/<span style="color:#f22">crit</span>';
   document.getElementById('p3d').appendChild(leg);
 
+  // --- fullscreen toggle ---
   function setSize() {
-    W = full ? window.innerWidth : 480;
-    H = full ? window.innerHeight - 22 : 340;
+    W = full ? window.innerWidth : PANEL_W;
+    H = full ? window.innerHeight - 22 : PANEL_H;
     var holder = document.getElementById('p3dc');
     holder.style.width = W + 'px'; holder.style.height = H + 'px';
     ren.setSize(W, H); cam.aspect = W / H; cam.updateProjectionMatrix();
@@ -275,6 +319,7 @@ if (window.THREE) (function () {
     full = !full; setSize(); this.textContent = full ? '🗗 map' : '⤢ full';
   };
 
+  // --- coordinate conversion ---
   var origin = null, meshes = {}, pos3 = {}, trails = {}, stars = {}, linkLines = null;
   function toWorld(lat, lon, alt) {
     if (!origin) origin = { lat: lat, lon: lon };
@@ -282,10 +327,12 @@ if (window.THREE) (function () {
       (lon - origin.lon) * 111320 * Math.cos(origin.lat * Math.PI / 180),
       alt * VEX, -(lat - origin.lat) * 111320);
   }
+
+  // --- satellite ground texture ---
   var satDone = false;
   function satGround() {
     if (satDone) return; satDone = true;
-    var z = 15, N = 5, TS = 256, P2 = Math.pow(2, z);
+    var z = SAT_ZOOM, N = SAT_GRID_N, TS = SAT_TILE_SIZE, P2 = Math.pow(2, z);
     function tx(lon) { return ((lon + 180) / 360) * P2; }
     function ty(lat) { var r = lat * Math.PI / 180;
       return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * P2; }
@@ -298,7 +345,7 @@ if (window.THREE) (function () {
     var cv = document.createElement('canvas'); cv.width = N * TS; cv.height = N * TS;
     var ctx = cv.getContext('2d'), done = 0;
     function apply() {
-      ground.material = new THREE.MeshLambertMaterial({ map: new THREE.CanvasTexture(cv), color: 0xdddddd });
+      ground.material = new THREE.MeshLambertMaterial({ map: new THREE.CanvasTexture(cv), color: SAT_GROUND_COLOR });
     }
     for (var i = 0; i < N; i++) for (var j = 0; j < N; j++) {
       (function (i, j) {
@@ -310,17 +357,19 @@ if (window.THREE) (function () {
       })(i, j);
     }
   }
+
+  // --- label sprite factory ---
   function makeLabel(text) {
-    var cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
+    var cv = document.createElement('canvas'); cv.width = LABEL_W; cv.height = LABEL_H;
     var tex = new THREE.CanvasTexture(cv);
     function redraw(alt, spd) {
       var x = cv.getContext('2d');
-      x.clearRect(0, 0, 256, 128);
-      x.fillStyle = 'rgba(0,10,4,0.72)'; x.fillRect(4, 6, 240, 116);
-      x.strokeStyle = '#00ff66'; x.lineWidth = 4; x.strokeRect(4, 6, 240, 116);
+      x.clearRect(0, 0, LABEL_W, LABEL_H);
+      x.fillStyle = 'rgba(0,10,4,0.72)'; x.fillRect(4, 6, LABEL_W - 16, LABEL_H - 12);
+      x.strokeStyle = '#00ff66'; x.lineWidth = 4; x.strokeRect(4, 6, LABEL_W - 16, LABEL_H - 12);
       x.shadowColor = '#00ff66'; x.shadowBlur = 10;
-      x.font = 'bold 52px monospace'; x.fillStyle = '#eaffee'; x.fillText(text, 18, 62);
-      x.font = 'bold 40px monospace'; x.fillStyle = '#8dffb0';
+      x.font = 'bold ' + LABEL_FONT_MAIN + 'px monospace'; x.fillStyle = '#eaffee'; x.fillText(text, 18, 62);
+      x.font = 'bold ' + LABEL_FONT_SUB + 'px monospace'; x.fillStyle = '#8dffb0';
       x.fillText(Math.max(0, Math.round(alt || 0)) + 'm \u00b7 ' + Math.max(0, Math.round(spd || 0)) + 'm/s', 18, 108);
       x.shadowBlur = 0;
       tex.needsUpdate = true;
@@ -331,19 +380,29 @@ if (window.THREE) (function () {
     sp.renderOrder = 10;
     return { sp: sp, redraw: redraw };
   }
+
+  // --- drone model factory (X500-style) ---
   function buildDrone(label) {
     var g = new THREE.Group();
     g.rotation.order = 'YXZ';
     var carbon = new THREE.MeshLambertMaterial({ color: 0x16181c });
     var grey = new THREE.MeshLambertMaterial({ color: 0xb8bcc0 });
+
+    // central plate
     var plate = new THREE.Mesh(new THREE.BoxGeometry(14, 3, 14), carbon);
     plate.castShadow = true; g.add(plate);
+
+    // battery pack
     var batt = new THREE.Mesh(new THREE.BoxGeometry(9, 4, 12),
       new THREE.MeshLambertMaterial({ color: 0x2e3440 }));
     batt.position.y = 3.5; batt.castShadow = true; g.add(batt);
+
+    // status LED
     var led = new THREE.Mesh(new THREE.SphereGeometry(1.6, 8, 6),
       new THREE.MeshBasicMaterial({ color: 0x00ff66 }));
     led.position.set(0, 6, 0); g.add(led);
+
+    // arms, motors, props
     var props = [];
     [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(function (s) {
       var dir = new THREE.Vector3(s[0], 0.12, s[1]).normalize();
@@ -362,6 +421,8 @@ if (window.THREE) (function () {
       prop.position.set(s[0] * 17, 4.5, s[1] * 17);
       g.add(prop); props.push(prop);
     });
+
+    // landing gear
     [-1, 1].forEach(function (s) {
       var legF = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 12, 6), grey);
       legF.rotation.z = s * 0.5; legF.position.set(s * 7, -6, 8); g.add(legF);
@@ -369,14 +430,20 @@ if (window.THREE) (function () {
       var rail = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 26, 6), grey);
       rail.rotation.x = Math.PI / 2; rail.position.set(s * 10, -10, 0); g.add(rail);
     });
+
+    // gimbal + camera
     var gim = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 4),
       new THREE.MeshLambertMaterial({ color: 0xd8b400 }));
     gim.position.set(0, -3, 4); g.add(gim);
     var camc = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 3, 8), carbon);
     camc.rotation.x = Math.PI / 2; camc.position.set(0, -3.5, 6.5); g.add(camc);
+
+    // nose indicator
     var nose = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.2, 3),
       new THREE.MeshBasicMaterial({ color: 0xff5500 }));
     nose.position.set(0, 1, -8); g.add(nose);
+
+    // battery halo + ground beam
     var halo = new THREE.Mesh(new THREE.RingGeometry(24, 27, 40),
       new THREE.MeshBasicMaterial({ color: 0x00ff66, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }));
     halo.rotation.x = -Math.PI / 2; halo.position.y = -12; g.add(halo);
@@ -384,16 +451,22 @@ if (window.THREE) (function () {
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -1, 0)]),
       new THREE.LineBasicMaterial({ color: 0x00ff66, transparent: true, opacity: 0.7, depthWrite: false }));
     beam.position.y = -12; g.add(beam);
+
+    // label sprite
     var lab = makeLabel(label);
     g.add(lab.sp);
+
+    // velocity arrow
     var arrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 60, 0xffcc00, 24, 10);
     arrow.visible = false;
     scene.add(arrow);
+
     g.userData = { props: props, led: led, halo: halo, beam: beam, label: lab, arrow: arrow };
     scene.add(g);
     return g;
   }
 
+  // --- wind state ---
   var wind = { spd: 0, dir: 0 };
   function lerpAng(a, b, t) {
     var d = b - a;
@@ -401,6 +474,8 @@ if (window.THREE) (function () {
     while (d < -Math.PI) d += 2 * Math.PI;
     return a + d * t;
   }
+
+  // --- telemetry subscription ---
   new ROSLIB.Topic({ ros: ros, name: '/swarm/telemetry',
     messageType: 'swarm_interfaces/msg/DroneTelemetry' }).subscribe(function (m) {
     var g = meshes[m.label] || (meshes[m.label] = buildDrone(m.label));
@@ -421,11 +496,11 @@ if (window.THREE) (function () {
     u.target = p;
     u.sRoll = -(m.roll || 0); u.sPitch = m.pitch || 0; u.sYaw = -(m.yaw || 0);
     wind.spd = m.wind_speed || wind.spd; wind.dir = m.wind_dir || wind.dir;
-    var col = m.battery_pct > 50 ? 0x00ff66 : m.battery_pct > 20 ? 0xffaa00 : 0xff2222;
+    var col = m.battery_pct > BATT_THRESHOLD_HIGH ? BATT_GREEN : m.battery_pct > BATT_THRESHOLD_LOW ? BATT_ORANGE : BATT_RED;
     u.led.material.color.setHex(col); u.halo.material.color.setHex(col);
     u.beam.material.color.setHex(col);
     var t = trails[m.label] || (trails[m.label] = []);
-    if (!t.length || t[t.length - 1].distanceTo(p) > 8) { t.push(p.clone()); if (t.length > 300) t.shift(); }
+    if (!t.length || t[t.length - 1].distanceTo(p) > TRAIL_MIN_DIST) { t.push(p.clone()); if (t.length > TRAIL_MAX) t.shift(); }
     if (u.trail) { u.trail.geometry.setFromPoints(t); }
     else {
       u.trail = new THREE.Line(
@@ -434,7 +509,7 @@ if (window.THREE) (function () {
       scene.add(u.trail);
     }
     var st = u.streak || (u.streak = []);
-    st.push(p.clone()); if (st.length > 20) st.shift();
+    st.push(p.clone()); if (st.length > STREAK_MAX) st.shift();
     if (u.streakLine) { u.streakLine.geometry.setFromPoints(st); }
     else {
       u.streakLine = new THREE.Line(
@@ -444,6 +519,7 @@ if (window.THREE) (function () {
     }
   });
 
+  // --- task request subscription (3D stars) ---
   new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests',
     messageType: 'swarm_interfaces/msg/TaskRequest' }).subscribe(function (m) {
     ringCoords[m.task_id] = [m.lat, m.lon];
@@ -459,6 +535,8 @@ if (window.THREE) (function () {
     stars[m.task_id] = s;
   });
   var ringCoords = {}, rings = {};
+
+  // --- task assignment subscription (3D rings) ---
   new ROSLIB.Topic({ ros: ros, name: '/swarm/task_assignments',
     messageType: 'swarm_interfaces/msg/TaskAssignment' }).subscribe(function (m) {
     var r = m.orbit_radius || 0;
@@ -474,6 +552,7 @@ if (window.THREE) (function () {
       new THREE.LineBasicMaterial({ color: 0xff22aa, transparent: true, opacity: 0.8 })));
   });
 
+  // --- mesh topology subscription (3D mesh lines) ---
   new ROSLIB.Topic({ ros: ros, name: '/swarm/mesh_topology',
     messageType: 'swarm_interfaces/msg/MeshTopology' }).subscribe(function (m) {
     if (linkLines) scene.remove(linkLines);
@@ -498,7 +577,8 @@ if (window.THREE) (function () {
     scene.add(linkLines);
   });
 
-  var NS = 36, sp = new Float32Array(NS * 6), sv = [];
+  // --- wind streaks ---
+  var NS = WIND_STREAK_COUNT, sp = new Float32Array(NS * 6), sv = [];
   for (var wi = 0; wi < NS; wi++) sv.push({
     x: (Math.random() - 0.5) * 6000, y: 60 + Math.random() * 500, z: (Math.random() - 0.5) * 6000 });
   var sGeo = new THREE.BufferGeometry();
@@ -509,7 +589,7 @@ if (window.THREE) (function () {
   function stepWind(dt) {
     if (wind.spd <= 0.1) { streaks.material.opacity = 0; return; }
     var go = (wind.dir + 180) * Math.PI / 180;
-    var vx = Math.sin(go) * wind.spd * 12, vz = -Math.cos(go) * wind.spd * 12;
+    var vx = Math.sin(go) * wind.spd * WIND_SCALE, vz = -Math.cos(go) * wind.spd * WIND_SCALE;
     for (var i = 0; i < NS; i++) {
       var s = sv[i];
       s.x += vx * dt; s.z += vz * dt;
@@ -519,9 +599,10 @@ if (window.THREE) (function () {
       sp[i * 6 + 3] = s.x - vx * 0.5; sp[i * 6 + 4] = s.y; sp[i * 6 + 5] = s.z - vz * 0.5;
     }
     sGeo.attributes.position.needsUpdate = true;
-    streaks.material.opacity = Math.min(0.5, wind.spd * 0.08);
+    streaks.material.opacity = Math.min(0.5, wind.spd * WIND_OPACITY_SCALE);
   }
 
+  // --- camera controls ---
   var theta = 0.9, phi = 0.9, radius = 2600, drag = null, pan = false;
   var targetOff = new THREE.Vector3(), follow = null;
   var el = ren.domElement;
@@ -536,28 +617,29 @@ if (window.THREE) (function () {
       phi = Math.min(1.45, Math.max(0.15, phi - (e.clientY - drag.y) * 0.005));
       drag = { x: e.clientX, y: e.clientY };
     } else if (pan) {
-      var s = radius * 0.0012;
+      var s = radius * PAN_SCALE;
       targetOff.x -= e.movementX * s * Math.cos(theta);
       targetOff.z += e.movementX * s * Math.sin(theta);
       targetOff.y += e.movementY * s;
     }
   });
   el.addEventListener('wheel', function (e) {
-    radius = Math.min(15000, Math.max(200, radius * (1 + e.deltaY * 0.0012)));
+    radius = Math.min(CAM_RADIUS_MAX, Math.max(CAM_RADIUS_MIN, radius * (1 + e.deltaY * ZOOM_SCALE)));
     e.preventDefault();
   }, { passive: false });
   el.addEventListener('dblclick', function () {
     var keys = Object.keys(meshes);
     if (!keys.length) return;
     follow = (follow === null) ? keys[0] : keys[(keys.indexOf(follow) + 1) % keys.length];
-    radius = Math.min(radius, 1500);
+    radius = Math.min(radius, CAM_FOLLOW_RADIUS);
   });
 
+  // --- animation loop ---
   var lastF = Date.now() / 1000, fc = 0;
   (function animate() {
     requestAnimationFrame(animate);
     var nf = Date.now() / 1000, dt = Math.min(0.08, nf - lastF); lastF = nf;
-    if (!drag) theta += 0.0004;
+    if (!drag) theta += ORBIT_SPEED;
     var sScale = THREE.MathUtils.clamp(radius / 1200, 1.2, 2.4);
     Object.keys(meshes).forEach(function (k, idx) {
       var g = meshes[k], u = g.userData;
@@ -568,8 +650,7 @@ if (window.THREE) (function () {
         if (u.vel) u.vel.multiplyScalar(0.9);
         u.dr = (u.dr || u.target || g.position).clone();
       }
-      var kS = 3.0, cS = 2 * Math.sqrt(3.0);
-      var acc = u.dr.clone().sub(u.dp).multiplyScalar(kS).addScaledVector(u.dv, -cS);
+      var acc = u.dr.clone().sub(u.dp).multiplyScalar(SPRING_K).addScaledVector(u.dv, -SPRING_C);
       u.dv.addScaledVector(acc, dt);
       u.dp.addScaledVector(u.dv, dt);
       g.position.copy(u.dp);
@@ -581,24 +662,24 @@ if (window.THREE) (function () {
       // attitude-first: streamed ArduPilot physics at 5 Hz is the primary source
       var yawT = u.sYaw, rollT = u.sRoll || 0, pitchT = u.sPitch || 0;
       if (hv > 8) yawT = Math.atan2(-u.dv.x, -u.dv.z);
-      u.vYaw = lerpAng(u.vYaw === undefined ? yawT : u.vYaw, yawT, 0.35);
-      u.vRoll = (u.vRoll === undefined ? 0 : u.vRoll * 0.65 + rollT * 0.35);
-      u.vPitch = (u.vPitch === undefined ? 0 : u.vPitch * 0.65 + pitchT * 0.35);
+      u.vYaw = lerpAng(u.vYaw === undefined ? yawT : u.vYaw, yawT, ATTITUDE_YAW_LERP);
+      u.vRoll = (u.vRoll === undefined ? 0 : u.vRoll * (1 - ATTITUDE_ROLL_PITCH_LERP) + rollT * ATTITUDE_ROLL_PITCH_LERP);
+      u.vPitch = (u.vPitch === undefined ? 0 : u.vPitch * (1 - ATTITUDE_ROLL_PITCH_LERP) + pitchT * ATTITUDE_ROLL_PITCH_LERP);
       g.rotation.set(u.vPitch, u.vYaw, u.vRoll);
       g.scale.setScalar(sScale);
       u.props.forEach(function (pr) {
-        pr.rotation.y += 0.9 + Math.min(1.5, Math.abs(u.climb || 0) * 0.15);
+        pr.rotation.y += PROP_SPIN_BASE + Math.min(1.5, Math.abs(u.climb || 0) * PROP_SPIN_CLIMB_SCALE);
       });
       u.beam.scale.y = Math.max(1, g.position.y / sScale);
       if (u.arrow) {
         var hvel = new THREE.Vector3(u.vel ? u.vel.x : 0, 0, u.vel ? u.vel.z : 0);
         var slen = hvel.length();
-        if (slen > 1.0) {
+        if (slen > ARROW_MIN_SPEED) {
           hvel.normalize();
           u.arrow.visible = true;
           u.arrow.position.set(g.position.x, g.position.y + 8 * sScale, g.position.z);
           u.arrow.setDirection(hvel);
-          u.arrow.setLength(Math.min(300, 50 + slen * 15), 24, 10);
+          u.arrow.setLength(Math.min(ARROW_MAX_LENGTH, ARROW_BASE_LENGTH + slen * ARROW_SPEED_SCALE), 24, 10);
         } else { u.arrow.visible = false; }
       }
     });
@@ -620,6 +701,7 @@ if (window.THREE) (function () {
 })();
 
 </script>
+
 <script>
 // ---- M3.5a: Human-in-the-Loop — auto sightings need a human click ----
 (function () {
