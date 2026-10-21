@@ -26,7 +26,9 @@ class PerceptionNode(Node):
         self.declare_parameter('model_path', 'yolo11n.pt')
         self.declare_parameter('fallback_model', 'yolo11n.pt')
         self.declare_parameter('min_confidence', 0.4)
-        self.declare_parameter('classes', ['person'])
+        # detector class names to keep (VisDrone and COCO names; mapped to person / vehicle)
+        self.declare_parameter('classes', ['person', 'pedestrian', 'people', 'car', 'van', 'truck', 'bus',
+                                           'motor', 'motorcycle'])
         self.declare_parameter('drone_label', 'D1')
         self.declare_parameter('sliced', False)
         self.declare_parameter('slice_px', 640)

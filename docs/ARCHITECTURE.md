@@ -131,6 +131,14 @@ drone so autopilot-level RTLs don't converge at one altitude.
 Tested: 10 drones on a single layer cross through one point with minimum
 separation ≥ 12 m (`dense_crossing`), and 12 agents swap across a circle.
 
+**Buildings.** With an OSM area (`area_file` in fleet.yaml) each drone builds a
+10 m height grid, dilated by its clearance, and plans with A* + line-of-sight
+smoothing *at its own altitude layer* (a 20 m warehouse is no obstacle at 42 m; a
+110 m tower is). The route is re-verified from the drone's actual position every
+tick (moving ring slots, ORCA nudges), goals inside buildings are replaced by the
+nearest free point, and a last-line brake scales down any velocity whose 3 s
+look-ahead would enter a building. `city_ops` among 110 m towers: 0 strikes.
+
 ## 7. Perception and the shared world model
 
 * `project_bbox` projects a detection's bounding box onto the ground using
@@ -140,9 +148,13 @@ separation ≥ 12 m (`dense_crossing`), and 12 agents swap across a circle.
   so two drones that see the same survivor agree it is one person. If they
   raced to create two RESCUE tasks, `resolve_duplicates` folds them
   identically everywhere.
-* Moving targets: a constant-velocity least-squares fit over every drone's
-  recent sightings steers the intercept ring, with lead pursuit for two
-  "cutter" slots.
+* Moving targets (`TargetTracker`): a real detector only says "vehicle", for the
+  quarry and every parked car. Every vehicle sighting is associated by global
+  nearest neighbour to small alpha-beta tracks (with a least-squares velocity);
+  the tracker locks on to the track that *moves* and started near the operator's
+  click, and parked cars keep feeding their own tracks. Same observations → same
+  lock on every drone. The ring centre follows it, two "cutter" slots lead it.
+  (`intercept_with_decoys`: 1 m mean error with 8 look-alikes.)
 * Human-in-the-loop: perception tasks are `SUGGESTED` and not allocatable
   until an operator confirms one. A confirmation reaching any drone spreads
   by gossip.
@@ -155,20 +167,34 @@ the same split). Each drone sweeps its strip, and searched cells are
 gossiped. When a drone leaves or dies, the survivors recompute and the gap
 gets covered.
 
-## 9. What is proven where
+## 9. Missions on the same primitives
+
+* **Perimeter patrol** (`PATROL`): a ring kind that never completes, rotating at
+  ~3 m/s; slots bid with a one-shift energy horizon so low batteries hand over.
+  `MotionWatch` tracks every person/vehicle inside the perimeter and reports one
+  only once it is confirmed *moving*; any drone that sees that spawns an
+  `INTERCEPT` (near-duplicates from other drones fold into the oldest). Bundles
+  hold one item, so open intercept slots *preempt* patrol duty: the k drones
+  nearest the intruder (by the shared roster) drop their patrol slot and bid.
+* **Flood recon** (`FLOOD`): a `SEARCH` plus a second G-Set of cells seen under
+  water, gossiped like coverage; on completion every drone emits the same
+  `FLOOD_MAP` (flooded hectares, people inside flooded cells).
+
+## 10. What is proven where
 
 | layer | how | what |
 |---|---|---|
 | pure core | `pytest` (in CI) | CBBA convergence (35 randomized lossy multi-hop runs), CRDT merge laws, FSM priorities, ORCA separation, projection geometry, fusion, coverage |
-| swarm behaviour | 9 simulator scenarios (in CI), also swept over seeds at 30% loss | dispatch, perimeter, intercept, search & rescue, battery handover, drone loss + refill, partition + heal, dense crossing, RTL sticks |
+| swarm behaviour | 14 simulator scenarios (in CI), some also at 30% loss | dispatch, perimeter, intercept (+ among decoys), search & rescue, flood recon, patrol + intruder, city ops, battery handover, drone loss + refill, partition + heal, dense crossing, RTL sticks |
 | MAVLink backend | tests against a fake ArduCopter over real MAVLink/UDP (in CI) | ACK handling and retries, mode-by-name, pre-arm failure reporting, no re-arm in flight, param set |
 | ROS 2 integration | `scripts/ros_acceptance.py` against the live ROS graph (in CI, sim backend) | telemetry, measured mesh, single executor, perimeter, RTL sticks, loss detection |
-| ArduPilot SITL | `swarm_sitl.launch.py` + `ros_acceptance.py` | see the README for status |
+| ArduPilot SITL | `swarm_sitl.launch.py` + `ros_acceptance.py` | 6/6 |
+| ArduPilot SITL in Gazebo physics | `scripts/gz/run_swarm.sh` + `swarm_gazebo.launch.py` + `ros_acceptance.py` | 6/6 (OSM city world) |
 
-## 10. Known limits
+## 11. Known limits
 
-* The simulator's vehicles are point masses and its radio is a disc model
-  with random loss. SITL and real radios are the next level of truth.
+* The fast simulator's vehicles are point masses and its radio is a disc model
+  with random loss. Gazebo + SITL and real radios are the next levels of truth.
 * Clocks: ring rotation and timestamps assume GPS-synchronised clocks
   (true on real drones; trivially true in simulation).
 * Gossip state grows with fleet size. Fine to around 20 drones. Beyond that,
@@ -177,5 +203,5 @@ gets covered.
   signing at the autopilot, plus SROS2 or HMAC on `SwarmPacket`) before any
   real deployment.
 * PX4 support in `MavlinkBackend` is written but untested.
-* Collision avoidance covers drones only, not terrain, buildings or manned
-  aircraft.
+* Building avoidance is only as good as OSM heights; no terrain or manned-aircraft
+  avoidance.
