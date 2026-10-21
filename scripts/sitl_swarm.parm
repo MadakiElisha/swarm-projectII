@@ -1,0 +1,6 @@
+# Extra SITL defaults for the swarm (applied after copter.parm).
+# Stock SITL simulates a 3.3 Ah pack (~7 min). A survey quad is closer to
+# 20-25 min, so give the simulator and the battery monitor 12 Ah.
+# The drones' in-flight drain calibration copes either way.
+SIM_BATT_CAP_AH 12
+BATT_CAPACITY   12000

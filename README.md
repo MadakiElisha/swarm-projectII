@@ -16,7 +16,7 @@ generator. The ground station is an optional observer and operator uplink.
 * **Shared world model**: detections projected to the ground, fused and
   de-duplicated across drones, with moving-target tracking for intercepts
 * **Decentralized search**: drones split an area and re-cover gaps when a drone is lost
-* **One energy model** for both bidding and battery self-checks (no
+* **One self-calibrating energy model** for bidding and battery self-checks (no
   assign-then-relinquish thrash)
 * Real ArduPilot over MAVLink (ACK-checked, mode-by-name), a sim backend,
   ROS 2 Jazzy, and a Leaflet + three.js web GCS
@@ -133,8 +133,8 @@ Mesh lines show **measured** link quality (packet-receipt ratio): blue > 80%, am
 
 | what | where | CI |
 |---|---|---|
-| 69 core tests: CBBA convergence (lossy multi-hop, bundles, ties, dead agents), CRDT merge laws, FSM priorities, ORCA, projection, fusion, coverage | `swarm_common/tests` | ✅ |
-| 9 swarm scenarios with the real brain + FSM: dispatch, perimeter, intercept, search & rescue, battery handover, drone loss + refill, partition + heal, dense crossing (10 drones, one layer), RTL sticks; plus heavy-loss variants | `swarm_common/sim/scenarios.py` | ✅ |
+| 71 core tests: CBBA convergence (lossy multi-hop, bundles, ties, dead agents), CRDT merge laws, FSM priorities, ORCA, projection, fusion, coverage | `swarm_common/tests` | ✅ |
+| 10 swarm scenarios with the real brain + FSM: miscalibrated batteries (in-flight drain learning), dispatch, perimeter, intercept, search & rescue, battery handover, drone loss + refill, partition + heal, dense crossing (10 drones, one layer), RTL sticks; plus heavy-loss variants | `swarm_common/sim/scenarios.py` | ✅ |
 | MAVLink backend against a fake ArduCopter over real MAVLink/UDP: ACKs, retries, mode-by-name, pre-arm failures, no re-arm in flight, params | `swarm_backends/tests` | ✅ |
 | colcon build + live ROS acceptance (A1–A6) with the sim backend | `scripts/ros_acceptance.py` | ✅ |
 | live acceptance against ArduPilot SITL | `scripts/regression.sh` | manual |

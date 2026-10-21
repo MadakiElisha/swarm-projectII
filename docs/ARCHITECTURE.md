@@ -95,6 +95,15 @@ so drones were assigned and then immediately gave the task up. Now
 from the model (e.g. stronger wind, worn battery). Another drone then
 re-bids the task automatically (`battery_handover` scenario).
 
+**In-flight calibration.** `DrainCalibrator` compares each drone's real
+battery drop (in the autopilot's whole-percent steps) with what the model
+predicted for the flight it actually flew, and scales the model. This came
+out of the first SITL run: stock ArduPilot SITL drains about 5× faster than
+`fleet.yaml` assumes. The drones had bid on a perimeter they couldn't hold,
+relinquished it, and the critical-battery failsafe brought them home. With
+calibration, the `miscalibrated_batteries` scenario (every pack 4× worse than
+modelled) learns 4.0× on every drone, and no drone ever needs the failsafe.
+
 ## 5. Vehicle authority: the safety FSM
 
 `VehicleFSM` sits between brain and autopilot. Priorities:

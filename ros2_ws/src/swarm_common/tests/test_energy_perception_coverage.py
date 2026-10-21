@@ -2,7 +2,7 @@ import math
 
 from swarm_common.config import EnergyCfg, PerceptionCfg
 from swarm_common.coverage import CoverageGrid, partition
-from swarm_common.energy import EnergyModel
+from swarm_common.energy import DrainCalibrator, EnergyModel
 from swarm_common.perception import Observation, WorldModel, project_bbox
 
 
@@ -67,3 +67,26 @@ def test_coverage_gset_merge_and_partition():
     assert p1 == p2
     cells = [c for share in p1.values() for c in share]
     assert len(cells) == len(set(cells)) == len(a.remaining())
+
+
+def test_drain_calibration_learns_real_consumption():
+    e = EnergyModel(EnergyCfg())
+    c = DrainCalibrator(e)
+    t = 0.0
+    true_rate = 4.0 * e.raw_rate_pct_s(10.0)          # battery is 4x worse than modelled
+    exact = 90.0
+    for _ in range(3000):
+        t += 0.1
+        exact -= true_rate * 0.1
+        c.update(t, float(int(exact)), 10.0, True)    # autopilots report whole percent
+    assert 3.5 <= e.scale <= 4.5
+    before = e.scale
+    c.update(t + 1, 95.0, 10.0, True)                # battery swap: no bogus sample
+    assert e.scale == before
+
+
+def test_calibration_tightens_feasibility():
+    e = EnergyModel(EnergyCfg())
+    cost_before = e.plan_pct((0, 0), [((2000, 0), 120.0)], (0, 0))
+    e.scale = 4.0
+    assert abs(e.plan_pct((0, 0), [((2000, 0), 120.0)], (0, 0)) - 4 * cost_before) < 1e-9

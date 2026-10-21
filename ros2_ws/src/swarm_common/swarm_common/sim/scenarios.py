@@ -250,7 +250,35 @@ def operator_rtl_sticks(seed=9) -> ScenarioResult:
     return r
 
 
+def miscalibrated_batteries(seed=10) -> ScenarioResult:
+    """Every battery drains 4x faster than fleet.yaml's model (like stock ArduPilot SITL).
+
+    Drones must learn their real drain in flight, stop bidding on work they
+    can no longer afford, and get home on their own decision - never via
+    the vehicle's critical-battery failsafe.
+    """
+    sim = SwarmSim(load_fleet(), seed=seed)
+    for v in sim.veh.values():
+        v.drain_factor = 4.0
+    sim.at(2, lambda s: s.operator_task("SWARM-9", 1200, 1300, to={1}))
+    sim.run(900)
+    r = ScenarioResult("miscalibrated_batteries", sim)
+    scales = {i: round(b.energy.scale, 1) for i, b in sim.brains.items()}
+    r.notes.append(f"learned drain scale per drone: {scales}")
+    crit = [i for i, f in sim.fsms.items() if f.latch == "critical battery"]
+    crit += [i for (_, line) in sim.logs for i in [line.split()[0]] if "critical battery" in line]
+    r.checks["every drone learned its real drain (scale 3-5x)"] = \
+        all(3.0 <= k <= 5.5 for k in scales.values())
+    r.checks["no critical-battery failsafe needed"] = not crit
+    r.checks["every drone landed on its own"] = all(v.alt < 0.5 for v in sim.veh.values())
+    r.checks["no sustained double execution"] = sim.longest_conflict() <= MAX_CONFLICT_S
+    if crit:
+        r.notes.append(f"failsafes: {sorted(set(crit))}")
+    return r
+
+
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
+    "miscalibrated_batteries": miscalibrated_batteries,
     "single_dispatch": single_dispatch,
     "perimeter": perimeter,
     "intercept": intercept,

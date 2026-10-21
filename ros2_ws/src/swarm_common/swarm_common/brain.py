@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 from .cbba import CBBA
 from .config import Fleet
 from .coverage import CoverageGrid, next_waypoint, partition
-from .energy import EnergyModel
+from .energy import DrainCalibrator, EnergyModel
 from .gossip import NeighborTable, Roster, RosterEntry
 from .motion import altitude_layer, arrived, avoid, limit_accel, preferred_velocity
 from .perception import Observation, WorldModel, footprint_radius
@@ -81,6 +81,7 @@ class DroneBrain:
         self.home = fleet.home_enu(drone_id)
         self.alt = altitude_layer(drone_id, self.cfg.motion)
         self.energy = EnergyModel(self.cfg.energy)
+        self.calib = DrainCalibrator(self.energy)
         self.cbba = CBBA(drone_id, self.cfg.cbba.max_bundle, self.cfg.cbba.rebid_margin)
         self.registry = TaskRegistry()
         self.roster = Roster()
@@ -199,6 +200,7 @@ class DroneBrain:
         self._last_tick = now
         pos = (s.x, s.y)
         airborne = s.alt > 1.0
+        self.calib.update(now, s.battery, math.hypot(s.vx, s.vy), airborne)
 
         self.world.prune(now)
         self._maintain_registry(now, out)
