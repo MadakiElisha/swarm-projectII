@@ -92,6 +92,7 @@ class SwarmCfg:
     geofence: GeofenceCfg = field(default_factory=GeofenceCfg)
     brain_stale_s: float = 1.5
     brain_dead_s: float = 10.0
+    area_file: str = ""            # OSM-derived area (buildings) - enables path planning
 
 
 @dataclass
@@ -110,6 +111,7 @@ class DroneSpec:
 class Fleet:
     swarm: SwarmCfg
     drones: List[DroneSpec]
+    area: Optional[dict] = None    # loaded area (buildings/water), see swarm_common.area
 
     def by_id(self, drone_id: int) -> DroneSpec:
         for d in self.drones:
@@ -177,9 +179,20 @@ def find_fleet_file(path: Optional[str] = None) -> str:
 
 
 def load_fleet(path: Optional[str] = None) -> Fleet:
-    with open(find_fleet_file(path)) as f:
+    fpath = find_fleet_file(path)
+    with open(fpath) as f:
         raw = yaml.safe_load(f)
-    return fleet_from_dict(raw)
+    fleet = fleet_from_dict(raw)
+    af = fleet.swarm.area_file
+    if af:
+        candidates = [af, os.path.join(os.path.dirname(fpath), af),
+                      os.path.join(os.path.dirname(fpath), "..", "..", "..", "..", af)]
+        hit = next((c for c in candidates if os.path.isfile(c)), None)
+        if hit is None:
+            raise FileNotFoundError(f"area_file {af!r} not found (looked next to {fpath})")
+        from .area import load_area
+        fleet.area = load_area(hit)
+    return fleet
 
 
 def fleet_from_dict(raw: dict) -> Fleet:

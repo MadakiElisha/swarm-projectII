@@ -21,6 +21,7 @@ from .energy import DrainCalibrator, EnergyModel
 from .gossip import NeighborTable, Roster, RosterEntry
 from .motion import altitude_layer, arrived, avoid, limit_accel, preferred_velocity
 from .perception import Observation, WorldModel, footprint_radius
+from .planner import Planner
 from .tasks import (DONE, FORMATION, GOTO, INTERCEPT, OPEN, RESCUE, SEARCH, SUGGESTED,
                     CANCELLED, Task, TaskRegistry, WorkItem, derive_work_items, ring_slot_xy)
 from .vehicle_fsm import (GROUND, LAND, RTL, ESTOP, SP_HOLD, SP_IDLE, SP_LAND, SP_VEL,
@@ -72,6 +73,18 @@ class BrainOutput:
     logs: List[str] = field(default_factory=list)
 
 
+_GRIDS = {}
+
+
+def _grid_for_area(area):
+    """Rasterise an area once per process (every brain in a sim shares it)."""
+    from .area import height_grid
+    key = id(area)
+    if key not in _GRIDS:
+        _GRIDS[key] = height_grid(area, cell=10.0)
+    return _GRIDS[key]
+
+
 class DroneBrain:
     def __init__(self, fleet: Fleet, drone_id: int):
         self.fleet = fleet
@@ -110,6 +123,8 @@ class DroneBrain:
         self._last_tick = None
         self.phase = "IDLE"
         self.logs: List[str] = []
+        self.planner = Planner(_grid_for_area(fleet.area)) if fleet.area else None
+        self._route = {"goal": None, "alt": None, "t": -1e9, "wps": []}
 
     # ================================================================ inputs
     def on_vehicle(self, s: OwnState):
@@ -240,15 +255,19 @@ class DroneBrain:
 
         # ---------------- motion
         if sp_kind == SP_VEL and target is not None:
-            pref = preferred_velocity(pos, target, self.cfg.motion, tvel)
+            alt = self.alt
+            if self.phase == "SEARCH":
+                alt = self.cfg.coverage.search_alt_m + (self.alt - self.cfg.motion.base_alt_m)
+            wp = self._route_to(pos, target, alt, now)
+            if wp is not target:                  # a corner of a planned detour
+                pref = preferred_velocity(pos, wp, self.cfg.motion, (0.0, 0.0), slow_radius_m=12.0)
+            else:
+                pref = preferred_velocity(pos, target, self.cfg.motion, tvel)
             nbrs = [((k[1], k[2]), (k[4], k[5]), k[3]) for i, k in self.kin.items()
                     if now - k[0] <= BEACON_FRESH_S]
             v = avoid(pos, (s.vx, s.vy), pref, s.alt, nbrs, self.cfg.motion, dt) if airborne else pref
             v = limit_accel(self._vel, v, self.cfg.motion.max_accel_mps2, dt)
             self._vel = v
-            alt = self.alt
-            if self.phase == "SEARCH":
-                alt = self.cfg.coverage.search_alt_m + (self.alt - self.cfg.motion.base_alt_m)
             out.setpoint = Setpoint(now, SP_VEL, v[0], v[1], 0.0, alt=alt)
         else:
             self._vel = (0.0, 0.0)
@@ -325,7 +344,8 @@ class DroneBrain:
         if self._going_home or now - self._idle_since > IDLE_RTB_S or isolated:
             self._going_home = True
             self.phase = "RTB"
-            if arrived(pos, self.home, self.cfg.motion.arrive_radius_m):
+            # land only when centred over my own pad (pads can be ~10 m apart)
+            if arrived(pos, self.home, 2.5) and math.hypot(s.vx, s.vy) < 1.0:
                 return None, (0.0, 0.0), SP_LAND
             return self.home, (0.0, 0.0), SP_VEL
         self.phase = "IDLE"
@@ -353,8 +373,8 @@ class DroneBrain:
             on = math.hypot(tx - pos[0], ty - pos[1]) <= self.cfg.formation.on_station_band_m
             self.phase = "ON_STATION" if on else "ENROUTE"
             return (tx, ty), tvel, SP_VEL
-        # GOTO / RESCUE: fly there, hold, mark done
-        target = (it.x, it.y)
+        # GOTO / RESCUE: fly there (or to the nearest reachable point), hold, mark done
+        target = self._approach((it.x, it.y), self.alt)
         if arrived(pos, target, self.cfg.motion.arrive_radius_m) and s.alt > 1.0:
             t0 = self._hold_started.setdefault(it.id, now)
             self.phase = "ON_TASK"
@@ -463,6 +483,44 @@ class DroneBrain:
                     self._dirty = True
 
     # =============================================================== helpers
+    def _route_to(self, pos, target, alt, now):
+        """Next waypoint towards target around buildings taller than my layer.
+
+        Re-verified every tick from where the drone actually IS: momentum, ORCA
+        nudges and moving goals (ring slots) can all put a corner in the way.
+        """
+        if self.planner is None:
+            return target
+        r = self._route
+        g = r["goal"]
+        stale = (g is None or math.hypot(g[0] - target[0], g[1] - target[1]) > 20.0
+                 or abs((r["alt"] or 0) - alt) > 3.0 or now - r["t"] > 8.0 or not r["wps"])
+        if not stale:
+            wps = r["wps"]
+            while len(wps) > 1 and math.hypot(wps[0][0] - pos[0], wps[0][1] - pos[1]) < 12.0:
+                wps.pop(0)
+            nxt = self._leg_end(wps, target)
+            stale = not self.planner.line_clear(pos, nxt, alt)
+        if stale:
+            free = self.planner.nearest_free(target, alt)
+            wps = self.planner.plan(pos, free, alt) or [free]
+            r.update(goal=target, alt=alt, t=now, wps=wps,
+                     adjusted=math.hypot(free[0] - target[0], free[1] - target[1]) > 1.0)
+        return self._leg_end(r["wps"], target)
+
+    def _leg_end(self, wps, target):
+        if len(wps) > 1:
+            return wps[0]
+        if self._route.get("adjusted"):
+            return wps[0]                        # goal is inside a building: hold beside it
+        return target                            # open last leg: track the (moving) goal
+
+    def _approach(self, target, alt):
+        """Reachable point for a task whose location is inside a tall building."""
+        if self.planner is None:
+            return target
+        return self.planner.nearest_free(target, alt)
+
     def _path_score(self, path: List[str], s: OwnState) -> Optional[float]:
         """CBBA score of doing `path` in order from my current state (None = infeasible)."""
         lam = self.cfg.cbba.discount_per_s

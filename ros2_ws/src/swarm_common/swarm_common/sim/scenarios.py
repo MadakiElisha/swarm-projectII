@@ -277,7 +277,42 @@ def miscalibrated_batteries(seed=10) -> ScenarioResult:
     return r
 
 
+def city_ops(seed=11, loss=0.1) -> ScenarioResult:
+    """Downtown with 60-110 m towers above the 30-54 m flight layers.
+
+    Drones must plan around towers for dispatches and a perimeter whose slots
+    fall between buildings, never entering a building footprint below its roof.
+    """
+    from ..area import synthetic_city
+    from ..config import DroneSpec, Fleet
+    area = synthetic_city(blocks=6, seed=seed)
+    sw = SwarmCfg()
+    lx, ly = area["launch"]
+    drones = []
+    for i in range(5):
+        lat, lon = sw.origin.to_latlon(lx + (i % 3) * 12 - 12, ly + (i // 3) * 12 - 6)
+        drones.append(DroneSpec(id=i + 1, home_lat=lat, home_lon=lon))
+    fleet = Fleet(swarm=sw, drones=drones, area=area)
+    sim = SwarmSim(fleet, seed=seed, net=NetCfg(loss=loss))
+    sim.at(2, lambda s: s.operator_task("T-NE", 380, 400, to={1}))
+    sim.at(2, lambda s: s.operator_task("T-SW", -420, -380, to={1}))
+    sim.at(150, lambda s: s.operator_task("SWARM-C", 160, -170, params={"radius": 180.0, "hold_s": 60.0},
+                                          to={2}))
+    sim.run(560)
+    r = ScenarioResult("city_ops", sim)
+    r.notes.append(f"towers up to {area['max_h']:.0f} m; building strikes {sim.building_hits} "
+                   f"{sim.building_log[:3]}")
+    r.checks["no drone ever entered a building"] = sim.building_hits == 0
+    r.checks["both dispatches completed"] = all(sim.brains[1].registry.get(t) and
+                                                sim.brains[1].registry.get(t).status == DONE
+                                                for t in ("T-NE", "T-SW"))
+    r.checks["perimeter formed among the towers"] = "PERIMETER_FORMED" in sim.event_names("SWARM-C")
+    r.checks["no sustained double execution"] = sim.longest_conflict() <= MAX_CONFLICT_S
+    return r
+
+
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
+    "city_ops": city_ops,
     "miscalibrated_batteries": miscalibrated_batteries,
     "single_dispatch": single_dispatch,
     "perimeter": perimeter,

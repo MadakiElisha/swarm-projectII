@@ -195,6 +195,12 @@ class SwarmSim:
         self.track: Dict[int, List[Tuple[float, float, float, float]]] = {i: [] for i in self.brains}
         self.auto_confirm = False
         self._next_sense = 0.0
+        self.building_hits = 0
+        self.building_log: List[Tuple[float, int, float, float]] = []
+        self._truth_grid = None
+        if fleet.area:
+            from ..area import height_grid
+            self._truth_grid = height_grid(fleet.area, cell=5.0, dilate=False)
         self.recorder = None          # optional swarm_common.sim.recorder.Recorder
 
     # ------------------------------------------------------------- scripting
@@ -328,6 +334,14 @@ class SwarmSim:
 
     def _metrics(self):
         ids = [i for i, v in self.veh.items() if v.alive and v.alt > 2.0]
+        if self._truth_grid is not None:
+            for i in ids:
+                v = self.veh[i]
+                roof = self._truth_grid.height_at(v.x, v.y)
+                if roof > 0 and v.alt < roof:
+                    self.building_hits += 1
+                    if len(self.building_log) < 30:
+                        self.building_log.append((round(self.t, 1), i, round(v.alt, 1), roof))
         for a_i, a in enumerate(ids):
             va = self.veh[a]
             self.track[a].append((self.t, va.x, va.y, va.alt))
