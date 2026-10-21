@@ -62,6 +62,7 @@ SW.UI.prototype._wire = function () {
     $('rosUrl').value = SW.settings.get('rosUrl') || '';
     $('heroScale').value = SW.settings.get('heroScale') || 6;
     $('quality').value = SW.settings.get('quality') || 'auto';
+    $('buildings').value = SW.settings.get('buildings') || 'height';
     $('settings').style.display = 'block';
   };
   $('closeSettings').onclick = function () { $('settings').style.display = 'none'; };
@@ -70,6 +71,7 @@ SW.UI.prototype._wire = function () {
     SW.settings.set('rosUrl', $('rosUrl').value.trim());
     SW.settings.set('heroScale', $('heroScale').value || '6');
     SW.settings.set('quality', $('quality').value === 'auto' ? '' : $('quality').value);
+    SW.settings.set('buildings', $('buildings').value);
     location.reload();
   };
   // ---- operator tools (live only)
@@ -78,7 +80,8 @@ SW.UI.prototype._wire = function () {
       var op = b.getAttribute('data-op');
       self.op = self.op === op ? null : op; self._searchA = null;
       document.querySelectorAll('[data-op]').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-op') === self.op); });
-      if (self.op) self.toast(op === 'SEARCH' ? 'Click the first corner of the search area' : 'Click the map to place ' + op);
+      if (self.op) self.toast((op === 'SEARCH' || op === 'FLOOD') ? 'Click the first corner of the area' :
+                              op === 'PATROL' ? 'Click the centre of the perimeter to guard' : 'Click the map to place ' + op);
     };
   });
   document.querySelectorAll('[data-cmd]').forEach(function (b) {
@@ -93,12 +96,15 @@ SW.UI.prototype._wire = function () {
   this.scene.onGroundClick = function (lat, lon) {
     if (!self.op || src.kind !== 'live') return;
     var n = Date.now() % 100000;
-    if (self.op === 'SEARCH') {
+    if (self.op === 'SEARCH' || self.op === 'FLOOD') {
       if (!self._searchA) { self._searchA = [lat, lon]; self.toast('Now click the opposite corner'); return; }
       var a = self._searchA;
-      src.sendTask('SEARCH-' + n, (a[0] + lat) / 2, (a[1] + lon) / 2,
+      src.sendTask(self.op + '-' + n, (a[0] + lat) / 2, (a[1] + lon) / 2,
                    'area=' + [a[0], a[1], lat, lon].map(function (v) { return v.toFixed(6); }).join(','));
       self._searchA = null;
+    } else if (self.op === 'PATROL') {
+      var r = parseFloat(prompt('Perimeter radius (m)', '250')) || 250;
+      src.sendTask('PATROL-' + n, lat, lon, 'radius=' + Math.round(r));
     } else {
       var prefix = { GOTO: 'T', SWARM: 'SWARM-', INTERCEPT: 'INTERCEPT-' }[self.op];
       src.sendTask(prefix + n, lat, lon, 'operator');
@@ -229,6 +235,12 @@ SW.UI.prototype.renderTasks = function () {
       var c = s.coverage[id], n = 0, bits = c.bits;
       while (bits > 0n) { n += Number(bits & 1n); bits >>= 1n; }
       extra = '<span class="slot agreed">covered ' + Math.round(100 * n / (c.nx * c.ny)) + '%</span>';
+      var w = s.coverage[id + '#water'];
+      if (w) {
+        var nw = 0, wb = w.bits;
+        while (wb > 0n) { nw += Number(wb & 1n); wb >>= 1n; }
+        extra += '<span class="slot contested">flooded ' + (nw * w.cell * w.cell / 1e4).toFixed(1) + ' ha</span>';
+      }
     }
     var stc = { OPEN: 'ENROUTE', SUGGESTED: 'RTB', DONE: 'ON_TASK', MERGED: '', CANCELLED: 'FAILSAFE' }[tk.st] || '';
     html += '<div class="tk"><div class="hd"><span class="id">' + esc(id) + '</span><span class="chip">' + esc(tk.k) +

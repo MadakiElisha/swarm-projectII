@@ -133,7 +133,9 @@ SW.Store.prototype.setTasks = function (t, list) {
 SW.Store.prototype.setCoverage = function (t, c) {
   var bits;
   try { bits = BigInt('0x' + (c.bits || '0')); } catch (e) { return; }
-  this.coverage[c.id] = { x0: c.x0, y0: c.y0, cell: c.cell, nx: c.nx, ny: c.ny, bits: bits, t: t };
+  var key = c.water ? c.id + '#water' : c.id;     // flood recon: cells seen under water
+  this.coverage[key] = { x0: c.x0, y0: c.y0, cell: c.cell, nx: c.nx, ny: c.ny, bits: bits, t: t,
+                         task: c.id, water: !!c.water };
   this.emit('coverage');
 };
 
@@ -150,8 +152,9 @@ SW.Store.prototype.pulse = function (t, src, kind) {
 SW.Store.prototype.missionEvent = function (t, task, ev, detail, reporter) {
   if (this.mission[task] === ev) return;          // every drone reports; show once
   this.mission[task] = ev;
-  var icon = { PERIMETER_FORMED: '⬢', PERIMETER_DEGRADED: '⬡', RELEASED: '◌' }[ev] || '•';
-  var kind = ev === 'PERIMETER_FORMED' ? 'good' : ev === 'PERIMETER_DEGRADED' ? 'bad' : 'info';
+  var icon = { PERIMETER_FORMED: '⬢', PERIMETER_DEGRADED: '⬡', RELEASED: '◌', INTRUDER: '⚠', FLOOD_MAP: '≋' }[ev] || '•';
+  var kind = ev === 'PERIMETER_FORMED' ? 'good' : (ev === 'PERIMETER_DEGRADED' || ev === 'INTRUDER') ? 'bad' :
+             ev === 'FLOOD_MAP' ? 'warn' : 'info';
   this.feed(t, icon, task + ' ' + ev.replace('PERIMETER_', '').toLowerCase() + ' · ' + detail +
             (reporter ? ' (D' + reporter + ')' : ''), kind);
   this.banner = { t: t, task: task, ev: ev, detail: detail };

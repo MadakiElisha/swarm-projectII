@@ -22,7 +22,7 @@ SW.ReplaySource = function (rec) {
 };
 SW.ReplaySource.prototype.fleet = function () {
   var m = this.meta;
-  return { origin: m.origin, drones: m.drones, swarm: m.cfg };
+  return { origin: m.origin, drones: m.drones, swarm: m.cfg, area: m.area };
 };
 SW.ReplaySource.prototype.attach = function (store) {
   this.store = store;
@@ -178,6 +178,17 @@ SW.LiveSource.prototype.onRadio = function (m) {
     try { bits = BigInt('0x' + (d.cov[tid] || '0')); } catch (e) { return; }
     if (prev) bits = bits | prev.bits;                    // G-Set union, like the drones
     s.setCoverage(t, { id: tid, x0: x0, y0: y0, cell: cell, nx: nx, ny: ny, bits: bits.toString(16) });
+  });
+  Object.keys(d.flood || {}).forEach(function (tid) {    // flood recon: cells under water
+    var tk = s.tasks[tid];
+    if (!tk || !tk.ar) return;
+    var x0 = Math.min(tk.ar[0], tk.ar[2]), y0 = Math.min(tk.ar[1], tk.ar[3]);
+    var nx = Math.max(1, Math.ceil(Math.abs(tk.ar[2] - tk.ar[0]) / cell));
+    var ny = Math.max(1, Math.ceil(Math.abs(tk.ar[3] - tk.ar[1]) / cell));
+    var prev = s.coverage[tid + '#water'], bits;
+    try { bits = BigInt('0x' + (d.flood[tid] || '0')); } catch (e) { return; }
+    if (prev) bits = bits | prev.bits;
+    s.setCoverage(t, { id: tid, water: 1, x0: x0, y0: y0, cell: cell, nx: nx, ny: ny, bits: bits.toString(16) });
   });
   (d.obs || []).forEach(function (o) {
     if (self.seenObs[o.oid]) return;

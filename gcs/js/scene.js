@@ -45,7 +45,13 @@ SW.Scene = function (container, store, opts) {
   v.shadowMap.maximumDistance = 3000;
   v.scene.screenSpaceCameraController.minimumZoomDistance = 15;
   this.groundH = 0;
-  if (token) this._enableTerrain();
+  // buildings: the operating area's own OSM footprints (exactly what the drones plan
+  // around - no token needed); with a token also terrain + Cesium OSM Buildings, or
+  // Google Photorealistic 3D Tiles
+  this.buildingStyle = SW.settings.get('buildings') || 'height';     // height | white | photo | off
+  if (token) this._enableTerrain(!!(store.fleet && store.fleet.area));
+  if (store.fleet && store.fleet.area && this.buildingStyle !== 'off' && this.buildingStyle !== 'photo')
+    this._buildCity(store.fleet.area);
   this.entities = {};
   this.trails = {};
   this.follow = null;
@@ -58,18 +64,105 @@ SW.Scene = function (container, store, opts) {
   this._pick();
 };
 
-SW.Scene.prototype._enableTerrain = function () {
-  var v = this.viewer, self = this;
+/* Colour ramp by height, low warm sand -> tall violet (matches the OSM-buildings look). */
+SW.HEIGHT_RAMP = [[0, '#ece6da'], [10, '#f6d58a'], [20, '#f3a65a'], [40, '#e4643f'], [80, '#b8357f'], [150, '#5b2a86']];
+SW.heightColor = function (h) {
+  var r = SW.HEIGHT_RAMP, i = 0;
+  while (i < r.length - 1 && h >= r[i + 1][0]) i++;
+  if (i === r.length - 1) return Cesium.Color.fromCssColorString(r[i][1]);
+  var a = Cesium.Color.fromCssColorString(r[i][1]), b = Cesium.Color.fromCssColorString(r[i + 1][1]);
+  return Cesium.Color.lerp(a, b, (h - r[i][0]) / (r[i + 1][0] - r[i][0]), new Cesium.Color());
+};
+
+SW.Scene.prototype._buildCity = function (area) {
+  var v = this.viewer, white = this.buildingStyle === 'white', self = this;
+  function ring(flat) {
+    var out = [];
+    for (var k = 0; k + 1 < flat.length; k += 2) {
+      var ll = SW.geo.toLatLon(flat[k], flat[k + 1]);
+      out.push(ll[1], ll[0]);
+    }
+    return Cesium.Cartesian3.fromDegreesArray(out);
+  }
+  var inst = [];
+  (area.b || []).forEach(function (b, i) {
+    var h = b[0], base = b[1] || 0;
+    var col = white ? Cesium.Color.fromCssColorString('#f4f4f2') : SW.heightColor(h);
+    try {
+      inst.push(new Cesium.GeometryInstance({
+        id: 'bldg' + i,
+        geometry: new Cesium.PolygonGeometry({
+          polygonHierarchy: new Cesium.PolygonHierarchy(ring(b[2])),
+          height: base, extrudedHeight: h,
+          vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
+        }),
+        attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(col) },
+      }));
+    } catch (e) { /* degenerate footprint */ }
+  });
+  this.cityPrims = [];
+  if (inst.length) {
+    this.city = v.scene.primitives.add(new Cesium.Primitive({
+      geometryInstances: inst, shadows: this.lite ? Cesium.ShadowMode.DISABLED : Cesium.ShadowMode.ENABLED,
+      appearance: new Cesium.PerInstanceColorAppearance({ translucent: false, closed: true, flat: false }),
+      asynchronous: true,
+    }));
+    this.cityPrims.push(this.city);
+  }
+  var water = (area.w || []).map(function (w) {
+    return new Cesium.GeometryInstance({
+      geometry: new Cesium.PolygonGeometry({ polygonHierarchy: new Cesium.PolygonHierarchy(ring(w)),
+                                             height: 0.2 }),
+      attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(
+        Cesium.Color.fromCssColorString('#1d4ed8').withAlpha(0.35)) },
+    });
+  });
+  if (water.length) {
+    this.cityPrims.push(v.scene.primitives.add(new Cesium.Primitive({
+      geometryInstances: water, appearance: new Cesium.PerInstanceColorAppearance({ translucent: true, flat: true }),
+    })));
+  }
+  this._liftCity();
+};
+
+/* Footprints are built at ellipsoid height 0; lift them onto the sampled terrain. */
+SW.Scene.prototype._liftCity = function () {
+  if (!this.cityPrims || !this.cityPrims.length) return;
+  var o = SW.geo.origin();
+  var up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(Cesium.Cartesian3.fromDegrees(o[1], o[0]), new Cesium.Cartesian3());
+  var m = Cesium.Matrix4.fromTranslation(Cesium.Cartesian3.multiplyByScalar(up, this.groundH, up));
+  this.cityPrims.forEach(function (p) { p.modelMatrix = m; });
+};
+
+SW.Scene.prototype._enableTerrain = function (haveArea) {
+  var v = this.viewer, self = this, style = this.buildingStyle;
   try {
+    if (style === 'photo') {                                 // Google Photorealistic 3D Tiles via ion
+      v.scene.globe.show = false;
+      Cesium.createGooglePhotorealistic3DTileset().then(function (t) { v.scene.primitives.add(t); })
+        .catch(function (e) { console.warn('photorealistic tiles unavailable', e); v.scene.globe.show = true; });
+      return;
+    }
     v.scene.setTerrain(Cesium.Terrain.fromWorldTerrain());
     v.scene.globe.depthTestAgainstTerrain = true;
-    Cesium.createOsmBuildingsAsync().then(function (b) { v.scene.primitives.add(b); });
+    // the area's own footprints are drawn when present (same data the drones plan with);
+    // otherwise show Cesium OSM Buildings everywhere, styled the same way
+    if (!haveArea && style !== 'off') {
+      Cesium.createOsmBuildingsAsync().then(function (b) {
+        var hexpr = "(${feature['cesium#estimatedHeight']} === undefined ? 10 : Number(${feature['cesium#estimatedHeight']}))";
+        var conds = style === 'white' ? [['true', "color('#f4f4f2')"]] :
+          SW.HEIGHT_RAMP.slice().reverse().map(function (r) { return [hexpr + ' >= ' + r[0], "color('" + r[1] + "')"]; });
+        b.style = new Cesium.Cesium3DTileStyle({ color: { conditions: conds } });
+        v.scene.primitives.add(b);
+      });
+    }
     var o = SW.geo.origin();
     Cesium.Terrain && Cesium.sampleTerrainMostDetailed && v.scene.terrainProvider &&
       setTimeout(function () {
         Cesium.sampleTerrainMostDetailed(v.scene.terrainProvider,
           [Cesium.Cartographic.fromDegrees(o[1], o[0])]).then(function (r) {
           self.groundH = (r[0] && r[0].height) || 0;
+          self._liftCity();
         }).catch(function () {});
       }, 3000);
   } catch (e) { console.warn('terrain unavailable', e); }

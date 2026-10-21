@@ -12,7 +12,7 @@ Format (compact JSON, version 1):
 """
 import json
 import math
-from typing import Dict, List
+from typing import Optional, Dict, List
 
 from ..vehicle_fsm import ESTOP, GROUND, GUIDED, HOLD, LAND, RTL, TAKEOFF
 
@@ -136,22 +136,26 @@ class Recorder:
             self.rows.append([round(now, 2), "T", snap])
 
     def _coverage(self, sim, now):
-        union: Dict[str, int] = {}
-        grids = {}
-        for i, b in sim.brains.items():
-            if not (sim.brain_alive[i] and sim.veh[i].alive):
-                continue
-            for tid, g in b.grids.items():
-                union[tid] = union.get(tid, 0) | g._bits
-                grids[tid] = g
-        for tid, bits in union.items():
-            h = format(bits, "x")
-            if self._last_cov.get(tid) != h:
-                self._last_cov[tid] = h
-                g = grids[tid]
-                self.rows.append([round(now, 2), "c", {"id": tid, "x0": g.x0, "y0": g.y0,
-                                                       "cell": g.cell, "nx": g.nx, "ny": g.ny,
-                                                       "bits": h}])
+        for attr, water in (("grids", 0), ("flood", 1)):      # searched cells, cells under water
+            union: Dict[str, int] = {}
+            grids = {}
+            for i, b in sim.brains.items():
+                if not (sim.brain_alive[i] and sim.veh[i].alive):
+                    continue
+                for tid, g in getattr(b, attr, {}).items():
+                    union[tid] = union.get(tid, 0) | g._bits
+                    grids[tid] = g
+            for tid, bits in union.items():
+                h = format(bits, "x")
+                key = tid + ("#water" if water else "")
+                if self._last_cov.get(key) != h:
+                    self._last_cov[key] = h
+                    g = grids[tid]
+                    row = {"id": tid, "x0": g.x0, "y0": g.y0, "cell": g.cell, "nx": g.nx, "ny": g.ny,
+                           "bits": h}
+                    if water:
+                        row["water"] = 1
+                    self.rows.append([round(now, 2), "c", row])
 
     def _observations(self, sim, now):
         for i, b in sim.brains.items():
@@ -181,6 +185,7 @@ class Recorder:
             "drones": [{"id": d.id, "label": d.label, "home": [d.home_lat, d.home_lon]}
                        for d in f.drones],
             "cfg": fleet_json(f)["swarm"],
+            "area": area_for_gcs(getattr(f, "area", None)),
             "victims": [[v.x, v.y] for v in self.sim.victims],
             "duration": round(self.sim.t, 1),
             "fsm_states": FSM_STATES,
@@ -200,10 +205,28 @@ def _rank(st):
     return STATUS_RANK.get(st, -1)
 
 
+def area_for_gcs(area) -> Optional[dict]:
+    """Compact building/water/road geometry (ENU metres, 0.1 m) for the 3D GCS: the
+    exact footprints the drones plan around, drawn without any map token."""
+    if not area:
+        return None
+
+    def flat(pts):
+        return [round(float(v), 1) for p in pts for v in p[:2]]
+    return {
+        "name": area.get("name", ""),
+        "max_h": area.get("max_h", 0.0),
+        "b": [[round(float(b.get("h", 0.0)), 1), round(float(b.get("base", 0.0)), 1), flat(b["poly"])]
+              for b in area.get("buildings", []) if len(b.get("poly", [])) >= 3],
+        "w": [flat(w["poly"]) for w in area.get("water", []) if len(w.get("poly", [])) >= 3],
+        "r": [[float(r.get("w", 6)), flat(r["line"])] for r in area.get("roads", []) if len(r.get("line", [])) >= 2],
+    }
+
+
 def fleet_json(fleet) -> dict:
     """The subset of fleet.yaml the GCS needs (served as gcs/fleet.json)."""
     sw = fleet.swarm
-    return {
+    out = {
         "origin": [sw.origin.lat, sw.origin.lon],
         "drones": [{"id": d.id, "label": d.label, "home": [d.home_lat, d.home_lon]}
                    for d in fleet.drones],
@@ -217,3 +240,7 @@ def fleet_json(fleet) -> dict:
             "geofence": vars(sw.geofence),
         },
     }
+    a = area_for_gcs(getattr(fleet, "area", None))
+    if a:
+        out["area"] = a
+    return out

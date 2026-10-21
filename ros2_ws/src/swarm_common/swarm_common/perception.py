@@ -337,11 +337,10 @@ class TargetTracker:
         new.sort(key=lambda o: (o.t, o.oid))
         for o in new:
             self._seen[o.oid] = o.t
-            if self.locked is not None:
-                if self._assoc(o, [self.locked]) is not None:
-                    self.locked.update(o, self.alpha, self.beta)
-                continue
-            trk = self._assoc(o, self.cands)
+            # global nearest neighbour: every sighting goes to the closest track, so a
+            # parked car's sightings feed ITS track, not the target's, even side by side
+            pool = self.cands + ([self.locked] if self.locked is not None else [])
+            trk = self._assoc(o, pool)
             if trk is None:
                 self.cands.append(_AB(o))
             else:
@@ -360,7 +359,9 @@ class TargetTracker:
                 if still:
                     self.locked = min(still, key=lambda c: math.hypot(c.x - self.cx, c.y - self.cy))
             if self.locked is not None:
-                self.cands = []
+                self.cands = [c for c in self.cands if c is not self.locked]
+        else:
+            self.cands = [c for c in self.cands if now - c.t <= 30.0]
         trk = self.locked
         if trk is None or now - trk.t > 20.0:            # never acquired, or lost for too long
             if trk is not None:                          # lost: re-acquire around the last estimate
@@ -369,3 +370,49 @@ class TargetTracker:
             return None
         x, y = trk.predict(now)
         return Track("tracked", "vehicle", x, y, trk.vx, trk.vy, now, trk.hits)
+
+
+class MotionWatch:
+    """Perimeter surveillance: which detected things are MOVING inside an area.
+
+    Tracks every person/vehicle sighting inside the watched circle with small
+    alpha-beta tracks; parked cars and standing guards stay put and are never
+    reported. A track is reported once, when it is confirmed moving.
+    """
+    def __init__(self, cx: float, cy: float, radius_m: float, t0: float,
+                 classes=("person", "vehicle", "target"), gate_m: float = 25.0):
+        self.cx, self.cy, self.r, self.t0 = cx, cy, radius_m, t0
+        self.classes = set(classes)
+        self.gate_m = gate_m
+        self.tracks: List[Tuple[str, _AB]] = []      # (first oid, track)
+        self.reported: set = set()
+        self._seen: Dict[str, float] = {}
+
+    def update(self, observations, now: float) -> List[Tuple[str, Track]]:
+        new = [o for o in observations if o.cls in self.classes and o.oid not in self._seen
+               and o.t >= self.t0 and math.hypot(o.x - self.cx, o.y - self.cy) <= self.r]
+        new.sort(key=lambda o: (o.t, o.oid))
+        for o in new:
+            self._seen[o.oid] = o.t
+            best, bd = None, 1e18
+            for _, trk in self.tracks:
+                px, py = trk.predict(o.t)
+                d = math.hypot(o.x - px, o.y - py)
+                if d <= min(150.0, self.gate_m + 3.0 * max(0.0, o.t - trk.t)) and d < bd:
+                    best, bd = trk, d
+            if best is None:
+                self.tracks.append((o.oid, _AB(o)))
+            else:
+                best.update(o, 0.5, 0.2)
+        if len(self._seen) > 20000:
+            self._seen = {k: t for k, t in self._seen.items() if t >= now - 120.0}
+        self.tracks = [(k, trk) for k, trk in self.tracks if now - trk.t <= 60.0]
+        out = []
+        for k, trk in self.tracks:
+            if k in self.reported:
+                continue
+            if trk.hits >= 4 and trk.t - trk.t0 >= 4.0 and trk.speed >= 0.8 and trk.displacement >= 8.0:
+                self.reported.add(k)
+                x, y = trk.predict(now)
+                out.append((k, Track(k, "intruder", x, y, trk.vx, trk.vy, now, trk.hits)))
+        return out

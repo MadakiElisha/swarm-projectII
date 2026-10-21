@@ -22,7 +22,10 @@ STATUS_RANK = {SUGGESTED: 0, OPEN: 1, DONE: 2, CANCELLED: 3, MERGED: 4}
 TERMINAL = {DONE, CANCELLED, MERGED}
 
 GOTO, RESCUE, FORMATION, INTERCEPT, SEARCH = "GOTO", "RESCUE", "FORMATION", "INTERCEPT", "SEARCH"
-KINDS = {GOTO, RESCUE, FORMATION, INTERCEPT, SEARCH}
+PATROL = "PATROL"           # standing perimeter surveillance: a slow-rotating ring, never "done"
+KINDS = {GOTO, RESCUE, FORMATION, INTERCEPT, SEARCH, PATROL}
+RING_KINDS = (FORMATION, INTERCEPT, PATROL)
+PATROL_SHIFT_S = 600.0      # energy horizon of one patrol shift; low batteries hand over
 
 DEFAULT_HOLD_S = {GOTO: 60.0, RESCUE: 120.0}
 
@@ -172,6 +175,10 @@ def ring_slot_xy(cx, cy, radius, slot, n_slots, t, created_t, period_s):
     return cx + radius * math.cos(th), cy + radius * math.sin(th)
 
 
+def ring_period(t: Task, formation_cfg) -> float:
+    return float(t.params.get("period_s", formation_cfg.ring_period_s))
+
+
 def derive_work_items(reg: TaskRegistry, now: float, formation_cfg,
                       centre_of: Callable[[Task], Optional[Tuple[float, float]]] = None
                       ) -> Dict[str, WorkItem]:
@@ -184,14 +191,19 @@ def derive_work_items(reg: TaskRegistry, now: float, formation_cfg,
             hold = float(t.params.get("hold_s", DEFAULT_HOLD_S[t.kind]))
             reward = 150.0 if t.kind == RESCUE else 100.0
             items[t.id] = WorkItem(t.id, t.id, t.kind, t.x, t.y, hold, reward)
-        elif t.kind in (FORMATION, INTERCEPT):
+        elif t.kind in RING_KINDS:
             n = int(t.params.get("n_slots", formation_cfg.max_slots))
             r = float(t.params.get("radius", formation_cfg.ring_radius_m))
             centre = (centre_of(t) if centre_of else None) or (t.x, t.y)
             for s in range(n):
                 sx, sy = ring_slot_xy(centre[0], centre[1], r, s, n, now, t.created_t,
-                                      formation_cfg.ring_period_s)
-                hold = max(0.0, float(t.params.get("expires_at", now)) - now)
+                                      ring_period(t, formation_cfg))
+                if t.kind == PATROL:
+                    # a standing patrol: bid for one shift; intercepts outrank it, so the
+                    # nearest patrollers peel off to chase an intruder and come back after
+                    hold, reward = float(t.params.get("shift_s", PATROL_SHIFT_S)), 90.0
+                else:
+                    hold, reward = max(0.0, float(t.params.get("expires_at", now)) - now), 120.0
                 items[f"{t.id}/s{s}"] = WorkItem(f"{t.id}/s{s}", t.id, t.kind, sx, sy, hold,
-                                                 reward=120.0, group=t.id, slot=s, n_slots=n)
+                                                 reward=reward, group=t.id, slot=s, n_slots=n)
     return items

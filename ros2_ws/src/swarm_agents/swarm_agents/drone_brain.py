@@ -114,6 +114,11 @@ class DroneBrainNode(Node):
             except (ValueError, IndexError):
                 self.get_logger().warn(f'{self.label}: bad search area in {desc!r}')
                 return
+        if 'radius=' in desc:                   # PATROL / SWARM: radius=<metres>
+            try:
+                params['radius'] = float(desc.split('radius=', 1)[1].split()[0].split(',')[0])
+            except (ValueError, IndexError):
+                self.get_logger().warn(f'{self.label}: bad radius in {desc!r}')
         res = self.brain.on_operator_task(m.task_id, x, y, self._now(), desc, params)
         self.get_logger().info(f'{self.label}: operator {m.task_id} -> {res}')
 

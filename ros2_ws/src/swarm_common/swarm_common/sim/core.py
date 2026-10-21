@@ -204,6 +204,7 @@ class SwarmSim:
         self.recorder = None          # optional swarm_common.sim.recorder.Recorder
         self.realistic_detector = False   # True: quarry seen as plain "vehicle", no velocity
         self.decoys: List[Tuple[float, float]] = []
+        self.flood_zones: List[Tuple[float, float, float, float]] = []   # x0, y0, x1, y1 under water
 
     # ------------------------------------------------------------- scripting
     def at(self, t: float, fn: Callable[["SwarmSim"], None]):
@@ -335,6 +336,16 @@ class SwarmSim:
                               (TARGET, self.quarry.vx, self.quarry.vy)
                 self.brains[i].on_detection(cls, q[0] + self.rnd.gauss(0, 2),
                                             q[1] + self.rnd.gauss(0, 2), 0.9, self.t, vx, vy)
+        if self.flood_zones:                    # water segmentation over the footprint
+            step = 20.0
+            n = int(r // step)
+            for a in range(-n, n + 1):
+                for b in range(-n, n + 1):
+                    px, py = v.x + a * step, v.y + b * step
+                    if math.hypot(px - v.x, py - v.y) > r:
+                        continue
+                    if any(x0 <= px <= x1 and y0 <= py <= y1 for (x0, y0, x1, y1) in self.flood_zones):
+                        self.brains[i].on_water(px, py, step / 2)
         for (dx, dy) in self.decoys:            # parked cars: also "vehicle"
             if math.hypot(dx - v.x, dy - v.y) <= max(r, 400.0) and self.rnd.random() < 0.7:
                 self.brains[i].on_detection("vehicle", dx + self.rnd.gauss(0, 2),

@@ -267,9 +267,9 @@ SW.Overlays.prototype.updateCoverage = function () {
           coordinates: Cesium.Rectangle.fromDegrees(a[1], a[0], b[1], b[0]),
           material: new Cesium.ImageMaterialProperty({ image: new Cesium.CallbackProperty(function () { return E.canvas; }, false),
                                                        transparent: true }),
-          height: 0.3,
+          height: c.water ? 0.6 : 0.3,
           show: new Cesium.CallbackProperty(function () {
-            var tk = s.tasks[id];
+            var tk = s.tasks[c.task || id];
             return self.scene.layers.coverage && (!tk || tk.st === 'OPEN' || tk.st === 'DONE');
           }, false),
         },
@@ -281,7 +281,10 @@ SW.Overlays.prototype.updateCoverage = function () {
     for (var i = 0; i < c.nx; i++) for (var j = 0; j < c.ny; j++) {
       var on = (bits >> BigInt(i * c.ny + j)) & 1n;
       var px = ((c.ny - 1 - j) * c.nx + i) * 4;          // canvas rows go north->south
-      if (on) { img.data[px] = 103; img.data[px + 1] = 232; img.data[px + 2] = 249; img.data[px + 3] = 58; }
+      if (c.water) {                                        // flood map: deep blue where water was seen
+        if (on) { img.data[px] = 30; img.data[px + 1] = 105; img.data[px + 2] = 255; img.data[px + 3] = 150; }
+        else img.data[px + 3] = 0;
+      } else if (on) { img.data[px] = 103; img.data[px + 1] = 232; img.data[px + 2] = 249; img.data[px + 3] = 58; }
       else { img.data[px] = 2; img.data[px + 1] = 6; img.data[px + 2] = 23; img.data[px + 3] = 18; }
     }
     ctx.putImageData(img, 0, 0);

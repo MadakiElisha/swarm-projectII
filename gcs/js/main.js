@@ -23,6 +23,12 @@ var SW = window.SW || (window.SW = {});
     var ov = SW.overlays = new SW.Overlays(scene, store);
     if (source.kind === 'replay') ov.addTruth(source.meta.victims);
     var ui = SW.ui = new SW.UI(store, scene, ov, source);
+    if (!SW.settings.get('ionToken') && !SW.settings.get('tokenHint')) {
+      SW.settings.set('tokenHint', '1');
+      setTimeout(function () {
+        ui.toast('Tip: paste a free Cesium ion token in ⚙ Settings for 3D terrain, city buildings and photorealistic tiles');
+      }, 4000);
+    }
     if (source.kind === 'replay') source.seek(q.has('t') ? parseFloat(q.get('t')) : 0);
     scene.overview(true);
     var last = performance.now(), sinceView = 0;

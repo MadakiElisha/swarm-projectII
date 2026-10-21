@@ -20,10 +20,11 @@ from .coverage import CoverageGrid, next_waypoint, partition
 from .energy import DrainCalibrator, EnergyModel
 from .gossip import NeighborTable, Roster, RosterEntry
 from .motion import altitude_layer, arrived, avoid, limit_accel, preferred_velocity
-from .perception import Observation, TargetTracker, Track, WorldModel, footprint_radius
+from .perception import MotionWatch, Observation, TargetTracker, Track, WorldModel, footprint_radius
 from .planner import Planner
-from .tasks import (DONE, FORMATION, GOTO, INTERCEPT, OPEN, RESCUE, SEARCH, SUGGESTED,
-                    CANCELLED, Task, TaskRegistry, WorkItem, derive_work_items, ring_slot_xy)
+from .tasks import (DONE, FORMATION, GOTO, INTERCEPT, OPEN, PATROL, RESCUE, RING_KINDS, SEARCH,
+                    SUGGESTED, CANCELLED, MERGED, Task, TaskRegistry, WorkItem, derive_work_items,
+                    ring_period, ring_slot_xy)
 from .vehicle_fsm import (GROUND, LAND, RTL, ESTOP, SP_HOLD, SP_IDLE, SP_LAND, SP_VEL,
                           Setpoint)
 
@@ -37,6 +38,8 @@ TERMINAL_TASK_KEEP_S = 300.0
 CLAIM_SETTLE_S = 2.5          # hold a fresh claim this long before acting on it
 PERSON, TARGET = "person", "target"
 TRACK_CLASSES = {"target", "vehicle"}      # what an intercept may follow (sim sensor, detector)
+INTRUDER_CLASSES = ("person", "vehicle", "target")
+FLOOD_MODE = "flood"
 
 
 @dataclass
@@ -102,6 +105,9 @@ class DroneBrain:
         self.neighbors = NeighborTable(self.cfg.neighbor_timeout_s)
         self.world = WorldModel(self.cfg.perception)
         self.grids: Dict[str, CoverageGrid] = {}
+        self.flood: Dict[str, CoverageGrid] = {}      # FLOOD recon: cells seen under water (G-Set)
+        self._watches: Dict[str, MotionWatch] = {}
+        self._reported: set = set()
         self.kin: Dict[int, Tuple[float, float, float, float, float, float]] = {}  # beacons
         self.own: Optional[OwnState] = None
         self.items: Dict[str, WorkItem] = {}
@@ -156,6 +162,10 @@ class DroneBrain:
         self.roster.merge(d.get("r", []))       # roster changes alone never force a resend
         ch |= self.registry.merge(d.get("tasks", []))
         self.world.merge(d.get("obs", []))
+        for tid, cells in (d.get("flood") or {}).items():
+            fg = self._flood_for(tid)
+            if fg is not None:
+                fg.merge(cells)
         for tid, cells in (d.get("cov") or {}).items():
             g = self._grid_for(tid)
             if g is not None:
@@ -183,7 +193,21 @@ class DroneBrain:
                 return "confirmed"
             return "duplicate"
         kind = self._kind_for(task_id)
-        if kind in (FORMATION, INTERCEPT):
+        if task_id.startswith("FLOOD-"):
+            params.setdefault("mode", FLOOD_MODE)
+        if kind == PATROL:
+            avail = [i for i in self.roster.alive(now, ROSTER_ALIVE_S) if self._available_peer(i)]
+            if self.id not in avail and self._available_self(now):
+                avail.append(self.id)
+            # keep `reserve` drones free: they respond to intruders and relieve tired patrollers
+            reserve = int(params.get("reserve", 1))
+            params.setdefault("n_slots", max(1, min(self.cfg.formation.max_slots, len(avail) - reserve)))
+            params.setdefault("radius", self.cfg.formation.ring_radius_m)
+            # sweep the perimeter at a walking-pace-ish 3 m/s: cameras get a steady look
+            # and drones have the margin to route around buildings on the way
+            params.setdefault("period_s", max(240.0, 2 * math.pi * float(params["radius"]) / 3.0))
+            params.setdefault("intruder_classes", list(INTRUDER_CLASSES))
+        elif kind in (FORMATION, INTERCEPT):
             avail = [i for i in self.roster.alive(now, ROSTER_ALIVE_S) if self._available_peer(i)]
             if self.id not in avail and self._available_self(now):
                 avail.append(self.id)
@@ -196,6 +220,7 @@ class DroneBrain:
         self.registry.upsert(Task(task_id, kind, x, y, now, self.id, OPEN, now, params))
         if kind == SEARCH:
             self._grid_for(task_id)
+            self._flood_for(task_id)
         self._log(f"{task_id}: accepted {kind} from operator")
         self._dirty = True
         return "created"
@@ -207,6 +232,24 @@ class DroneBrain:
         self.world.add(Observation(f"{self.id}-{self._obs_seq}", cls, gx, gy, conf, now,
                                    self.id, vx, vy))
         self._dirty = cls == PERSON or self._dirty
+
+    def on_water(self, gx: float, gy: float, radius_m: float = 5.0):
+        """My camera's water segmentation says the ground around (gx, gy) is flooded."""
+        for g in self.flood.values():
+            if g.mark_footprint(gx, gy, max(radius_m, g.cell * 0.5)):
+                self._dirty = True
+
+    def flood_report(self, task_id: str) -> Optional[dict]:
+        """Flood map summary for a FLOOD recon task (identical on every drone once merged)."""
+        g, fg = self.grids.get(task_id), self.flood.get(task_id)
+        if g is None or fg is None:
+            return None
+        cell_a = g.cell * g.cell
+        stranded = [t for t in self.registry.tasks.values() if t.kind == RESCUE and t.status != MERGED
+                    and fg.cell_of(t.x, t.y) in fg.covered]
+        return {"surveyed_m2": len(g.covered) * cell_a, "flooded_m2": len(fg.covered) * cell_a,
+                "flooded_pct": 100.0 * len(fg.covered) / max(1, len(g.covered)),
+                "stranded": len(stranded), "cells": sorted(fg.covered)}
 
     # ================================================================== tick
     def tick(self, now: float) -> BrainOutput:
@@ -240,6 +283,7 @@ class DroneBrain:
             self._going_home = True
             self._dirty = True
         if available and not self._going_home:
+            self._preempt_for_intercept(now, s)
             if self.cbba.build_bundle(self.items.keys(), lambda p: self._path_score(p, s),
                                       lambda j: self.items[j].group if j in self.items else "",
                                       now):
@@ -269,6 +313,7 @@ class DroneBrain:
             nbrs = [((k[1], k[2]), (k[4], k[5]), k[3]) for i, k in self.kin.items()
                     if now - k[0] <= BEACON_FRESH_S]
             v = avoid(pos, (s.vx, s.vy), pref, s.alt, nbrs, self.cfg.motion, dt) if airborne else pref
+            v = self._building_brake(pos, v, alt)
             v = limit_accel(self._vel, v, self.cfg.motion.max_accel_mps2, dt)
             self._vel = v
             out.setpoint = Setpoint(now, SP_VEL, v[0], v[1], 0.0, alt=alt)
@@ -357,15 +402,15 @@ class DroneBrain:
     def _fly_item(self, it: WorkItem, now: float, s: OwnState):
         pos = (s.x, s.y)
         tvel = (0.0, 0.0)
-        if it.kind in (FORMATION, INTERCEPT):
+        if it.kind in RING_KINDS:
             parent = self.registry.get(it.parent)
             cx, cy, vx, vy = self._centre(parent, now)
             r = float(parent.params.get("radius", self.cfg.formation.ring_radius_m))
-            tx, ty = ring_slot_xy(cx, cy, r, it.slot, it.n_slots, now, parent.created_t,
-                                  self.cfg.formation.ring_period_s)
+            period = ring_period(parent, self.cfg.formation)
+            tx, ty = ring_slot_xy(cx, cy, r, it.slot, it.n_slots, now, parent.created_t, period)
             # ring rotation + centre motion feed-forward, blended in only near
             # the slot (far away it would just bend the approach path)
-            w = 2 * math.pi / self.cfg.formation.ring_period_s
+            w = 2 * math.pi / period
             d_slot = math.hypot(tx - pos[0], ty - pos[1])
             band = self.cfg.formation.on_station_band_m
             k = max(0.0, min(1.0, (5 * band - d_slot) / (4 * band)))
@@ -433,7 +478,7 @@ class DroneBrain:
     def _maintain_registry(self, now: float, out: BrainOutput):
         reg = self.registry
         for t in reg.active():
-            if t.kind in (FORMATION, INTERCEPT) and now >= float(t.params.get("expires_at", 1e18)):
+            if t.kind in RING_KINDS and now >= float(t.params.get("expires_at", 1e18)):
                 reg.set_status(t.id, DONE, now)
                 self._dirty = True
             if t.kind == SEARCH:
@@ -442,9 +487,18 @@ class DroneBrain:
                     reg.set_status(t.id, DONE, now)
                     self._log(f"{t.id}: area fully covered")
                     self._dirty = True
+            if t.kind == PATROL:
+                self._watch_perimeter(t, now, out)
             if t.kind == INTERCEPT and t.id in self._tracks:
                 tr = self._tracks[t.id]
                 t.params["last_fix"] = [tr.x, tr.y]
+        for tid in list(self.flood):
+            t = reg.get(tid)
+            if t is not None and t.status == DONE and tid not in self._reported:
+                self._reported.add(tid)
+                fr = self.flood_report(tid)
+                out.events.append((tid, "FLOOD_MAP", f"{fr['flooded_m2'] / 1e4:.1f} ha flooded "
+                                   f"({fr['flooded_pct']:.0f}% of surveyed), {fr['stranded']} people stranded"))
         # perception -> RESCUE suggestions (deterministic ids => natural dedup)
         for tr in self.world.static_tracks(PERSON):
             near = [t for t in reg.tasks.values() if t.kind == RESCUE and
@@ -457,6 +511,8 @@ class DroneBrain:
             self._dirty = True
         if reg.resolve_duplicates(RESCUE, 2 * self.cfg.perception.fuse_radius_m, now):
             self._dirty = True
+        if reg.resolve_duplicates(INTERCEPT, 150.0, now):
+            self._dirty = True
         for t in reg.tasks.values():
             if t.kind == RESCUE and t.status == SUGGESTED and t.id not in self._suggested_seen:
                 self._suggested_seen.add(t.id)
@@ -464,7 +520,7 @@ class DroneBrain:
 
     def _mission_events(self, now: float, out: BrainOutput):
         for t in self.registry.tasks.values():
-            if t.kind not in (FORMATION, INTERCEPT):
+            if t.kind not in RING_KINDS:
                 continue
             if t.terminal:
                 if t.id not in self._released_events and self._formed.get(t.id) is not None:
@@ -482,12 +538,69 @@ class DroneBrain:
                 out.events.append((t.id, "PERIMETER_DEGRADED", f"{on}/{n} on station"))
             self._formed[t.id] = formed
             # the hold clock starts once the ring is formed (any drone may end it;
-            # DONE is idempotent in the registry lattice)
-            if formed or prev:
+            # DONE is idempotent in the registry lattice). A patrol stands until cancelled.
+            if t.kind != PATROL and (formed or prev):
                 since = self._formed_since.setdefault(t.id, now)
                 if now - since >= float(t.params.get("hold_s", self.cfg.formation.hold_s)):
                     self.registry.set_status(t.id, DONE, now)
                     self._dirty = True
+
+    def _preempt_for_intercept(self, now: float, s: OwnState):
+        """Bundles hold one item, so a patroller would never look at a new intercept.
+        Unfilled intercept slots preempt patrol duty: the k drones nearest the intruder
+        (k = open slots), among those idle or patrolling, drop their patrol slot and
+        bid. Every drone ranks the same roster, so they mostly agree who goes; CBBA
+        settles the rest."""
+        mine = [j for j in self.cbba.path if j in self.items and self.items[j].kind == PATROL]
+        if not mine:
+            return
+        open_slots = [it for it in self.items.values()
+                      if it.kind == INTERCEPT and self.cbba.winner(it.id) == 0]
+        if not open_slots:
+            return
+        cx = sum(it.x for it in open_slots) / len(open_slots)
+        cy = sum(it.y for it in open_slots) / len(open_slots)
+        pool = [(math.hypot(e.x - cx, e.y - cy), e.id) for e in self.roster.entries.values()
+                if now - e.t <= ROSTER_ALIVE_S and e.available and e.airborne
+                and (not e.task or e.task.startswith("PATROL-"))]
+        if self.id not in {i for _, i in pool}:
+            pool.append((math.hypot(s.x - cx, s.y - cy), self.id))
+        chosen = {i for _, i in sorted(pool)[:len(open_slots)]}
+        if self.id in chosen:
+            for j in mine:
+                self.cbba.release(j)
+            self._log(f"leaving {mine[0]} to respond to an intruder")
+            self._dirty = True
+
+    def _watch_perimeter(self, t: Task, now: float, out: BrainOutput):
+        """Perimeter surveillance: a moving person/vehicle inside the patrol circle is an
+        intruder -> spawn an INTERCEPT on it. Every drone runs this on the same gossiped
+        sightings; near-duplicate intercepts fold into the oldest one."""
+        r = float(t.params.get("radius", self.cfg.formation.ring_radius_m))
+        w = self._watches.get(t.id)
+        if w is None:
+            w = self._watches[t.id] = MotionWatch(
+                t.x, t.y, r * float(t.params.get("watch_factor", 1.2)), t.created_t,
+                t.params.get("intruder_classes", INTRUDER_CLASSES))
+        for oid, tr in w.update(self.world.obs.values(), now):
+            busy = False
+            for i in self.registry.tasks.values():
+                if i.kind == INTERCEPT and not i.terminal:
+                    fx, fy = i.params.get("last_fix") or (i.x, i.y)
+                    busy |= math.hypot(fx - tr.x, fy - tr.y) <= 150.0
+            if busy:
+                continue
+            n_alive = len(set(self.roster.alive(now, ROSTER_ALIVE_S)) | {self.id})
+            n = max(1, min(int(t.params.get("responders", 2)), n_alive))
+            iid = f"INTERCEPT-{t.id[len('PATROL-'):]}-{oid}"
+            self.registry.upsert(Task(iid, INTERCEPT, tr.x, tr.y, now, self.id, OPEN, now, {
+                "n_slots": n, "radius": float(t.params.get("intercept_radius", 60.0)),
+                "hold_s": float(t.params.get("intercept_hold_s", 120.0)),
+                "expires_at": now + 600.0, "from": t.id,
+                "desc": f"intruder inside {t.id}"}))
+            out.events.append((t.id, "INTRUDER", f"moving object at ({tr.x:.0f}, {tr.y:.0f}) -> {iid}"))
+            self._log(f"{t.id}: intruder at ({tr.x:.0f}, {tr.y:.0f}) -> {iid}")
+            self._dirty = True
 
     # =============================================================== helpers
     def _route_to(self, pos, target, alt, now):
@@ -514,6 +627,24 @@ class DroneBrain:
             r.update(goal=target, alt=alt, t=now, wps=wps,
                      adjusted=math.hypot(free[0] - target[0], free[1] - target[1]) > 1.0)
         return self._leg_end(r["wps"], target)
+
+    def _building_brake(self, pos, v, alt, lookahead_s: float = 3.0):
+        """Last line of defence: never command a velocity whose next few seconds run
+        into a building at my layer (ring feed-forward, ORCA nudges, a goal that just
+        jumped). Scale it down until the short look-ahead is clear."""
+        if self.planner is None or (v[0] == 0.0 and v[1] == 0.0):
+            return v
+        for k in (1.0, 0.5, 0.25):
+            end = (pos[0] + v[0] * k * lookahead_s, pos[1] + v[1] * k * lookahead_s)
+            if self.planner.line_clear(pos, end, alt):
+                return (v[0] * k, v[1] * k)
+        # boxed in (e.g. already inside the clearance margin): back out towards free space
+        free = self.planner.nearest_free(pos, alt)
+        d = math.hypot(free[0] - pos[0], free[1] - pos[1])
+        if d < 1e-3:
+            return (0.0, 0.0)
+        sp = min(2.0, d)
+        return ((free[0] - pos[0]) / d * sp, (free[1] - pos[1]) / d * sp)
 
     def _leg_end(self, wps, target):
         if len(wps) > 1:
@@ -568,6 +699,17 @@ class DroneBrain:
             return c[0], c[1]
         return derive_work_items(self.registry, now, self.cfg.formation, centre_of)
 
+    def _flood_for(self, task_id: str) -> Optional[CoverageGrid]:
+        fg = self.flood.get(task_id)
+        if fg is not None:
+            return fg
+        t = self.registry.get(task_id)
+        if t is None or t.params.get("mode") != FLOOD_MODE or "area" not in t.params:
+            return None
+        x0, y0, x1, y1 = t.params["area"]
+        fg = self.flood[task_id] = CoverageGrid(x0, y0, x1, y1, self.cfg.coverage.cell_m)
+        return fg
+
     def _grid_for(self, task_id: str) -> Optional[CoverageGrid]:
         g = self.grids.get(task_id)
         if g is not None:
@@ -589,7 +731,7 @@ class DroneBrain:
             out.assignments.append(Assignment("", "", ""))
             return
         parent = self.registry.get(it.parent)
-        radius = float(parent.params.get("radius", 0.0)) if it.kind in (FORMATION, INTERCEPT) else 0.0
+        radius = float(parent.params.get("radius", 0.0)) if it.kind in RING_KINDS else 0.0
         out.assignments.append(Assignment(it.id, it.parent, it.kind,
                                           parent.x if parent else it.x,
                                           parent.y if parent else it.y, radius))
@@ -600,8 +742,8 @@ class DroneBrain:
 
     @staticmethod
     def _kind_for(task_id: str) -> str:
-        for prefix, kind in (("SWARM-", FORMATION), ("INTERCEPT-", INTERCEPT),
-                             ("RESCUE-", RESCUE), ("SEARCH-", SEARCH)):
+        for prefix, kind in (("SWARM-", FORMATION), ("INTERCEPT-", INTERCEPT), ("PATROL-", PATROL),
+                             ("RESCUE-", RESCUE), ("SEARCH-", SEARCH), ("FLOOD-", SEARCH)):
             if task_id.startswith(prefix):
                 return kind
         return GOTO
@@ -623,6 +765,9 @@ class DroneBrain:
             "obs": obs[:MAX_OBS_PER_PACKET],
             "cov": {tid: g.to_wire() for tid, g in self.grids.items()
                     if (self.registry.get(tid) and not self.registry.get(tid).terminal)},
+            "flood": {tid: g.to_wire() for tid, g in self.flood.items()
+                      if self.registry.get(tid) and (not self.registry.get(tid).terminal
+                                                     or now - self.registry.get(tid).status_t <= 300.0)},
         }
 
     def _log(self, msg: str):

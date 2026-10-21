@@ -339,7 +339,78 @@ def intercept_with_decoys(seed=12, loss=0.1) -> ScenarioResult:
     return r
 
 
+def flood_recon(seed=21, loss=0.15) -> ScenarioResult:
+    """FLOOD recon: survey a district, map what is under water, find stranded people."""
+    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim.auto_confirm = True
+    zones = [(500.0, 600.0, 1100.0, 1000.0), (1200.0, 1200.0, 1600.0, 1500.0)]
+    sim.flood_zones = zones
+    sim.victims = [Victim(800, 800), Victim(1400, 1350), Victim(400, 1450)]   # 2 stranded, 1 dry
+    area = [300.0, 500.0, 1700.0, 1600.0]
+    sim.at(2, lambda s: s.operator_task("FLOOD-1", 1000, 1050, params={"area": area}, to={1}))
+    sim.run(900)
+    r = ScenarioResult("flood_recon", sim)
+    reps = [b.flood_report("FLOOD-1") for b in sim.brains.values()]
+    rep = reps[0]
+    truth = sum((x1 - x0) * (y1 - y0) for (x0, y0, x1, y1) in zones)
+    err = abs(rep["flooded_m2"] - truth) / truth if rep else 1.0
+    if rep:
+        r.notes.append(f"flood map: {rep['flooded_m2'] / 1e4:.1f} ha mapped vs {truth / 1e4:.1f} ha true "
+                       f"({err * 100:.0f}% error), {rep['stranded']} stranded people")
+    r.checks["FLOOD_MAP reported"] = "FLOOD_MAP" in sim.event_names("FLOOD-1")
+    r.checks["flooded area within 20% of truth"] = err <= 0.20
+    r.checks["every drone holds the same flood map"] = len({tuple(map(tuple, x["cells"])) for x in reps if x}) == 1
+    r.checks["every person found"] = all(v.found_by for v in sim.victims)
+    r.checks["stranded people identified (2)"] = rep is not None and rep["stranded"] == 2
+    r.checks["no sustained double execution"] = sim.longest_conflict() <= MAX_CONFLICT_S
+    return r
+
+
+def patrol_intruder(seed=22, loss=0.1) -> ScenarioResult:
+    """Perimeter surveillance: a standing patrol ring; parked cars and a guard inside are
+    ignored; a car that drives in is detected and intercepted automatically; the patrol
+    keeps going."""
+    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim.realistic_detector = True
+    sim.decoys = [(1150, 1250), (1260, 1330), (1190, 1380)]           # parked inside the perimeter
+    sim.quarry = Quarry(1700, 1300, -3.0, 0.4, start=260.0, stop=520.0)   # drives in from the east
+    sim.at(2, lambda s: s.operator_task("PATROL-1", 1200, 1300, params={"radius": 250.0}, to={1}))
+    errs, ring_ok = [], []
+
+    def watch(s):
+        if s.t >= 330 and abs(s.t % 5) < 1e-6:
+            q = s.quarry.at(s.t)
+            ints = [t for t in s.brains[1].registry.tasks.values()
+                    if t.kind == "INTERCEPT" and not t.terminal]
+            if q and ints:
+                tr = s.brains[1]._tracks.get(sorted(ints, key=lambda t: t.def_key())[0].id)
+                if tr is not None:
+                    errs.append(math.hypot(tr.x - q[0], tr.y - q[1]))
+            ring_ok.append(any(e.task.startswith("PATROL-1/") for e in s.brains[1].roster.entries.values()))
+    sim.run(560, watch)
+    r = ScenarioResult("patrol_intruder", sim)
+    b = sim.brains[1]
+    ints = [t for t in b.registry.tasks.values() if t.kind == "INTERCEPT" and t.status != MERGED]
+    first_intr = min((e[0] for e in sim.events if e[2] == "PATROL-1" and e[3] == "INTRUDER"), default=None)
+    mean_err = sum(errs) / len(errs) if errs else 1e9
+    r.notes.append(f"intercepts spawned: {len(ints)}; track error {mean_err:.0f} m; first INTRUDER at "
+                   f"{first_intr if first_intr is not None else '-'} s")
+    r.checks["PATROL ring formed"] = "PERIMETER_FORMED" in sim.event_names("PATROL-1")
+    r.checks["no intruder alarm before the car arrives"] = not any(
+        t.created_t < 260 for t in b.registry.tasks.values() if t.kind == "INTERCEPT")
+    r.checks["INTRUDER raised"] = "INTRUDER" in sim.event_names("PATROL-1")
+    r.checks["exactly one intercept (dedup across drones)"] = len(ints) == 1
+    r.checks["intercept ring formed on the intruder"] = bool(ints) and \
+        "PERIMETER_FORMED" in sim.event_names(ints[0].id)
+    r.checks["track follows the intruder (< 40 m)"] = mean_err < 40.0
+    r.checks["patrol still manned"] = bool(ring_ok) and all(ring_ok[-10:])
+    r.checks["no loss of separation"] = sim.los_samples == 0
+    return r
+
+
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
+    "flood_recon": flood_recon,
+    "patrol_intruder": patrol_intruder,
     "intercept_with_decoys": intercept_with_decoys,
     "city_ops": city_ops,
     "miscalibrated_batteries": miscalibrated_batteries,
