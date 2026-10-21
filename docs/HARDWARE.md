@@ -114,8 +114,9 @@ procedure (lost link, flyaway, manned aircraft).
 
 * **Packet authentication**: gossip is not signed yet. Add per-drone keys
   (Ed25519 over the packet) before flying near anyone who might inject packets.
-* **Flood segmentation on the camera path**: the flood map is wired end to end in the
-  brain and GCS but the camera side needs a water-segmentation model (train on FloodNet).
+* **Flood segmentation model**: the camera → water cells → flood map path is wired
+  (`water_model` on perception_node); the colour baseline only suits simulation. Train
+  a segmentation model on FloodNet (+ local Lagos imagery) before relying on it.
 * **Terrain**: projection assumes flat ground at the origin's elevation; fine for Lagos,
   not for hills.
 * **PX4**: the MAVLink backend speaks PX4 but only ArduPilot is tested.

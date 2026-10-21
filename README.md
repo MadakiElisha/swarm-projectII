@@ -206,8 +206,9 @@ Live mode adds operator tools (Dispatch, Perimeter, Intercept, Search, Patrol, F
 * Buildings come from OSM: a building with a missing/low height tag is a real risk.
   No terrain or manned-aircraft avoidance yet.
 * YOLO detections are projected with a flat-ground assumption.
-* Flood mapping is complete in the brain/GCS, but the camera side needs a
-  water-segmentation model (FloodNet); the simulators fake that sensor.
+* Flood mapping runs camera → water cells → shared map, but the only water
+  detector so far is a colour baseline for Gazebo; real floodwater needs a
+  segmentation model (FloodNet) passed as `water_model`.
 * Clocks must be synchronised (GPS time + chrony) on real drones.
 
 ## 8. Roadmap

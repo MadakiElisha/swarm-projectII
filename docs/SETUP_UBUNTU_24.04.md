@@ -216,6 +216,9 @@ python perception/visdrone.py install --weights runs/visdrone/yolo11s/weights/be
   physics, cameras rendering the scene, YOLO on those images, OSM buildings.
 * **Simulated**: the radio (brains emulate range/loss on one machine; use the Docker
   netem harness for a real network), GPS (perfect unless you add SIM_GPS noise), wind.
-* **Not yet on the camera path**: the flood map needs a water-segmentation model (the
-  simulator fakes this sensor). Next step: train YOLO11-seg on **FloodNet** (UAV
-  imagery of flooded roads/buildings) and publish water masks to the brain's `on_water`.
+* **Flood mapping from the camera**: with `--flood` worlds the perception node uses a
+  colour baseline (`water_model:=hsv`, tuned to Gazebo's flood water) to turn image
+  patches into "water" detections → the shared flood map. Real floodwater needs a
+  segmentation model: train YOLO11-seg on **FloodNet** (UAV imagery of flooded
+  Houston) and pass it as `water_model:=<weights>` (any class named *water*/*flood*
+  is used). Until then, treat real-world flood maps as unvalidated.

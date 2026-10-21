@@ -17,7 +17,8 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
 from swarm_interfaces.msg import Detection, DetectionArray
-from swarm_common.vision_core import filter_detections, swarm_class
+from swarm_common.vision_core import (WATER, WATER_HSV_HI, WATER_HSV_LO, filter_detections, swarm_class,
+                                      water_cells)
 
 
 class PerceptionNode(Node):
@@ -33,6 +34,10 @@ class PerceptionNode(Node):
         self.declare_parameter('sliced', False)
         self.declare_parameter('slice_px', 640)
         self.declare_parameter('imgsz', 1024)
+        # flood mapping: '' (off) | 'hsv' (colour baseline, simulation) | path to a YOLO-seg model
+        # whose class names contain "water"/"flood" (e.g. trained on FloodNet)
+        self.declare_parameter('water_model', '')
+        self.declare_parameter('water_hz', 1.0)
         self.label = self.get_parameter('drone_label').value
         self.min_conf = self.get_parameter('min_confidence').value
         self.classes = set(self.get_parameter('classes').value)
@@ -53,6 +58,11 @@ class PerceptionNode(Node):
                                                                confidence_threshold=self.min_conf)
             except Exception as e:      # optional dependency
                 self.get_logger().warn(f'sliced inference unavailable ({e}); using full-frame')
+        self.water_mode = os.path.expanduser(str(self.get_parameter('water_model').value or ''))
+        self.water_seg = None
+        if self.water_mode and self.water_mode != 'hsv':
+            self.water_seg = YOLO(self.water_mode)
+        self._last_water = 0.0
         self.topic = f'/swarm/{self.label}/camera/compressed'
         self.pub = self.create_publisher(DetectionArray, f'/swarm/{self.label}/detections', 10)
         self.create_subscription(CompressedImage, self.topic, self.on_image, 10)
@@ -98,6 +108,7 @@ class PerceptionNode(Node):
             det.bbox_x, det.bbox_y = x1 / w, y1 / h
             det.bbox_w, det.bbox_h = (x2 - x1) / w, (y2 - y1) / h
             out.detections.append(det)
+        out.detections.extend(self._water(frame))
         out.count = len(out.detections)
 
         self.pub.publish(out)
@@ -105,6 +116,35 @@ class PerceptionNode(Node):
             self.get_logger().info(f'[{self.label}] {out.count} detection(s): '
                                    f'{sorted({d.class_name for d in out.detections})}',
                                    throttle_duration_sec=2.0)
+
+    def _water(self, frame):
+        """Water cells in this frame as "water" detections (flood recon), at water_hz."""
+        if not self.water_mode:
+            return []
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - self._last_water < 1.0 / max(0.1, float(self.get_parameter('water_hz').value)):
+            return []
+        self._last_water = now
+        if self.water_seg is None:                      # colour baseline
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, np.array(WATER_HSV_LO, np.uint8), np.array(WATER_HSV_HI, np.uint8)) > 0
+        else:
+            mask = np.zeros(frame.shape[:2], bool)
+            for r in self.water_seg.predict(frame, imgsz=self.imgsz, verbose=False):
+                if r.masks is None:
+                    continue
+                names = self.water_seg.names
+                for m, c in zip(r.masks.data.cpu().numpy(), r.boxes.cls.cpu().numpy()):
+                    n = str(names[int(c)]).lower()
+                    if 'water' in n or 'flood' in n:
+                        mask |= cv2.resize(m, (frame.shape[1], frame.shape[0])) > 0.5
+        dets = []
+        for (u0, v0, u1, v1, frac) in water_cells(mask):
+            d = Detection()
+            d.class_name, d.confidence = WATER, float(frac)
+            d.bbox_x, d.bbox_y, d.bbox_w, d.bbox_h = u0, v0, u1 - u0, v1 - v0
+            dets.append(d)
+        return dets
 
 
 def main(args=None):

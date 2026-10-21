@@ -8,7 +8,7 @@ world has cameras - Gazebo image -> JPEG -> YOLO perception, i.e. the same
 camera topics a real drone publishes. Brains emulate radio range/loss (one
 machine); everything else is what flies on hardware.
 
-Arguments: perception:=true|false  model:=<yolo weights>  loss:=0.1
+Arguments: perception:=true|false  model:=<yolo weights>  water_model:=hsv|<seg weights>  loss:=0.1
 """
 import json
 import os
@@ -50,6 +50,10 @@ def _setup(context):
                                   name=f'perception_{d.label.lower()}',
                                   parameters=[{'drone_label': d.label, 'model_path': lc('model'),
                                                'min_confidence': 0.35,
+                                               # flooded world: map water (colour baseline unless
+                                               # a segmentation model is given)
+                                               'water_model': lc('water_model') or
+                                               ('hsv' if info.get('flood_m') else ''),
                                                'classes': ['person', 'pedestrian', 'people', 'car', 'van',
                                                            'truck', 'bus']}]))
     nodes.append(Node(package='swarm_mesh', executable='mesh_observer', name='mesh_observer'))
@@ -65,5 +69,6 @@ def generate_launch_description():
         DeclareLaunchArgument('loss', default_value='0.05'),
         DeclareLaunchArgument('perception', default_value='true'),
         DeclareLaunchArgument('model', default_value=os.path.expanduser('~/swarm_models/visdrone_yolo11s.pt')),
+        DeclareLaunchArgument('water_model', default_value=''),
         OpaqueFunction(function=_setup),
     ])

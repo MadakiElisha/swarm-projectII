@@ -312,8 +312,8 @@ def build(args):
         flood = f"""
     <model name="flood_water"><static>true</static><pose>{cx:.1f} {cy:.1f} {args.flood / 2:.2f} 0 0 0</pose>
       <link name="l"><visual name="v"><geometry><box><size>{sx:.0f} {sy:.0f} {args.flood:.2f}</size></box></geometry>
-        <material><ambient>0.25 0.33 0.30 1</ambient><diffuse>0.30 0.38 0.32 1</diffuse>
-          <specular>0.6 0.6 0.6 1</specular></material><transparency>0.35</transparency></visual></link></model>"""
+        <material><ambient>0.16 0.27 0.35 1</ambient><diffuse>0.20 0.33 0.42 1</diffuse>
+          <specular>0.6 0.6 0.6 1</specular></material><transparency>0.1</transparency></visual></link></model>"""
 
     city = "".join(f"\n    <include><uri>model://{p}</uri><name>{p}</name></include>" for p in parts)
     sensors = ("""

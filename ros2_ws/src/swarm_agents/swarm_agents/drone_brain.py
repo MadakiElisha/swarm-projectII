@@ -134,6 +134,10 @@ class DroneBrainNode(Node):
             g = project_bbox(u, v, vs.x, vs.y, vs.alt, vs.roll, vs.pitch, vs.yaw_enu, cfg)
             if g is None:
                 continue
+            if d.class_name == 'water':           # flood recon: a patch of the image is water
+                half = 0.5 * max(d.bbox_w, d.bbox_h) * 2.0 * footprint_radius(vs.alt, cfg)
+                self.brain.on_water(g[0], g[1], half)
+                continue
             cls = PERSON if d.class_name == 'person' else d.class_name
             self.brain.on_detection(cls, g[0], g[1], float(d.confidence), now)
 
