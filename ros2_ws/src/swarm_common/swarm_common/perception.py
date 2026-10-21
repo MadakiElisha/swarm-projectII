@@ -116,9 +116,16 @@ class WorldModel:
                 continue
         return changed
 
+    MOVING = ("target", "vehicle")
+    VEHICLE_KEEP_S = 60.0          # long enough to learn which cars are parked
+
     def _keep_for(self, o: Observation) -> float:
-        # moving targets only matter inside the tracking window; static objects persist
-        return 2 * self.cfg.target_track_window_s if o.cls == "target" else self.keep_s
+        # moving things only matter for a short while; people/survivors persist
+        if o.cls == "target":
+            return 2 * self.cfg.target_track_window_s
+        if o.cls == "vehicle":
+            return self.VEHICLE_KEEP_S
+        return self.keep_s
 
     def prune(self, now: float):
         stale = [k for k, o in self.obs.items() if now - o.t > self._keep_for(o)]
@@ -130,7 +137,7 @@ class WorldModel:
     def recent_wire(self, now: float, window_s: float) -> List[dict]:
         out = []
         for o in self.obs.values():
-            w = min(window_s, self.cfg.target_track_window_s) if o.cls == "target" else window_s
+            w = min(window_s, self.cfg.target_track_window_s) if o.cls in self.MOVING else window_s
             if now - o.t <= w:
                 out.append(o.to_wire())
         return out
@@ -169,10 +176,29 @@ class WorldModel:
         self._static_cache[cls] = (self.version, out)
         return out
 
-    def moving_track(self, cls: str, now: float) -> Optional[Track]:
-        """Constant-velocity least-squares fit over the recent window."""
+    def moving_track(self, cls, now: float, prior: Optional[Track] = None,
+                     gate_m: float = 60.0) -> Optional[Track]:
+        """Constant-velocity least-squares fit over the recent window.
+
+        cls: a class name or a set of them. With a prior (the track so far) only
+        sightings near where the target SHOULD be are used (gated nearest-neighbour
+        association), so parked cars and other vehicles don't pull the track.
+        """
+        classes = {cls} if isinstance(cls, str) else set(cls)
         win = [o for o in self.obs.values()
-               if o.cls == cls and now - o.t <= self.cfg.target_track_window_s]
+               if o.cls in classes and now - o.t <= self.cfg.target_track_window_s]
+        if prior is not None:
+            gated = []
+            for o in win:
+                dt = o.t - prior.t
+                px, py = prior.x + prior.vx * dt, prior.y + prior.vy * dt
+                if prior.n:
+                    g = gate_m + 2.0 * abs(dt)              # tracking: uncertainty grows with time
+                else:
+                    g = min(1500.0, gate_m + 25.0 * abs(dt))  # acquiring: it may have driven off
+                if math.hypot(o.x - px, o.y - py) <= g:
+                    gated.append(o)
+            win = gated
         if not win:
             return None
         win.sort(key=lambda o: (o.t, o.oid))
@@ -194,3 +220,152 @@ class WorldModel:
             vy = sum((t - tm) * (o.y - ym) for t, o in zip(ts, win)) / var
         dt = (now - t0) - tm
         return Track(win[0].oid, cls, xm + vx * dt, ym + vy * dt, vx, vy, win[-1].t, len(win))
+
+
+# ---------------------------------------------------------------- pursuit tracker
+class _AB:
+    """Alpha-beta (constant velocity) filter on the ground plane."""
+    __slots__ = ("x", "y", "vx", "vy", "t", "hits", "t0", "x0", "y0", "path", "hist")
+    HIST_S = 15.0
+
+    def __init__(self, o: Observation):
+        self.x, self.y, self.vx, self.vy, self.t = o.x, o.y, o.vx, o.vy, o.t
+        self.hits, self.t0, self.x0, self.y0 = 1, o.t, o.x, o.y
+        self.path = 0.0                     # distance travelled (filtered)
+        self.hist = [(o.t, o.x, o.y)]       # recent associated sightings
+
+    def predict(self, t: float) -> Tuple[float, float]:
+        dt = t - self.t
+        return self.x + self.vx * dt, self.y + self.vy * dt
+
+    def update(self, o: Observation, alpha: float, beta: float):
+        dt = o.t - self.t
+        px, py = self.predict(o.t)
+        rx, ry = o.x - px, o.y - py
+        nx, ny = px + alpha * rx, py + alpha * ry
+        if dt > 1e-3:
+            k = beta / max(dt, 0.5)
+            self.vx += k * rx
+            self.vy += k * ry
+        if o.vx or o.vy:                    # detector gave a velocity: trust it partly
+            self.vx = 0.5 * self.vx + 0.5 * o.vx
+            self.vy = 0.5 * self.vy + 0.5 * o.vy
+        self.path += math.hypot(nx - self.x, ny - self.y)
+        self.x, self.y = nx, ny
+        self.t = max(self.t, o.t)
+        self.hits += 1
+        self.hist.append((o.t, o.x, o.y))
+        self.hist = [h for h in self.hist if self.t - h[0] <= self.HIST_S]
+        if not (o.vx or o.vy):
+            self._fit_velocity()
+
+    def _fit_velocity(self):
+        """Least-squares velocity over the recent sightings: far less noisy than beta alone."""
+        h = self.hist
+        if len(h) < 5:
+            return
+        tm = sum(a[0] for a in h) / len(h)
+        var = sum((a[0] - tm) ** 2 for a in h)
+        if var < 4.0:
+            return
+        xm = sum(a[1] for a in h) / len(h)
+        ym = sum(a[2] for a in h) / len(h)
+        self.vx = sum((a[0] - tm) * (a[1] - xm) for a in h) / var
+        self.vy = sum((a[0] - tm) * (a[2] - ym) for a in h) / var
+
+    @property
+    def speed(self) -> float:
+        return math.hypot(self.vx, self.vy)
+
+    @property
+    def displacement(self) -> float:
+        return math.hypot(self.x - self.x0, self.y - self.y0)
+
+
+class TargetTracker:
+    """Follows ONE moving vehicle among many look-alikes.
+
+    A real detector only says "vehicle" - for the quarry and for every parked
+    car around it. Before lock we track every vehicle we see (nearest-neighbour
+    alpha-beta tracks) and lock on to the one that (a) actually moves and
+    (b) started near where the operator pointed. After lock, only sightings
+    inside a gate around the predicted position update it, so parked cars and
+    other traffic can't pull it away. If nothing moving ever shows up, the
+    stationary vehicle nearest the click is taken (the operator may have
+    pointed at a parked car). Deterministic given the same observation set,
+    so every drone running it on gossiped observations converges on the same
+    target.
+    """
+    def __init__(self, x: float, y: float, t: float, classes=("target", "vehicle"),
+                 gate_m: float = 25.0, alpha: float = 0.5, beta: float = 0.2,
+                 acquire_speed: float = 6.0):
+        self.cx, self.cy, self.ct = x, y, t
+        self.classes = set(classes)
+        self.gate_m, self.alpha, self.beta = gate_m, alpha, beta
+        self.acquire_speed = acquire_speed       # how far the target may have driven since the click
+        self.cands: List[_AB] = []
+        self.locked: Optional[_AB] = None
+        self._seen: Dict[str, float] = {}
+
+    def _gate(self, trk: _AB, t: float) -> float:
+        return min(150.0, self.gate_m + 3.0 * max(0.0, t - trk.t))
+
+    def _assoc(self, o: Observation, tracks: List[_AB]) -> Optional[_AB]:
+        best, bd = None, 1e18
+        for trk in tracks:
+            px, py = trk.predict(o.t)
+            d = math.hypot(o.x - px, o.y - py)
+            if d <= self._gate(trk, o.t) and d < bd:
+                best, bd = trk, d
+        return best
+
+    def _start_ok(self, trk: _AB) -> bool:
+        r = 60.0 + self.acquire_speed * max(0.0, trk.t0 - self.ct)
+        # project the track back to the click time: a car that drove away from
+        # the click point is still "the one the operator meant"
+        bx = trk.x - trk.vx * (trk.t - self.ct)
+        by = trk.y - trk.vy * (trk.t - self.ct)
+        return (math.hypot(trk.x0 - self.cx, trk.y0 - self.cy) <= r
+                or math.hypot(bx - self.cx, by - self.cy) <= 80.0)
+
+    def _moving(self, trk: _AB) -> bool:
+        return trk.hits >= 4 and trk.t - trk.t0 >= 4.0 and trk.speed >= 1.0 and trk.displacement >= 10.0
+
+    def update(self, observations, now: float) -> Optional[Track]:
+        new = [o for o in observations
+               if o.cls in self.classes and o.oid not in self._seen and o.t >= self.ct - 1.0]
+        new.sort(key=lambda o: (o.t, o.oid))
+        for o in new:
+            self._seen[o.oid] = o.t
+            if self.locked is not None:
+                if self._assoc(o, [self.locked]) is not None:
+                    self.locked.update(o, self.alpha, self.beta)
+                continue
+            trk = self._assoc(o, self.cands)
+            if trk is None:
+                self.cands.append(_AB(o))
+            else:
+                trk.update(o, self.alpha, self.beta)
+        if len(self._seen) > 5000:                       # bounded memory
+            cut = now - 120.0
+            self._seen = {k: t for k, t in self._seen.items() if t >= cut}
+        if self.locked is None:
+            self.cands = [c for c in self.cands if now - c.t <= 30.0]
+            movers = [c for c in self.cands if self._moving(c) and self._start_ok(c)]
+            if movers:
+                self.locked = min(movers, key=lambda c: (math.hypot(c.x0 - self.cx, c.y0 - self.cy), c.t0))
+            elif now - self.ct > 90.0:
+                still = [c for c in self.cands if c.hits >= 3
+                         and math.hypot(c.x - self.cx, c.y - self.cy) <= 60.0]
+                if still:
+                    self.locked = min(still, key=lambda c: math.hypot(c.x - self.cx, c.y - self.cy))
+            if self.locked is not None:
+                self.cands = []
+        trk = self.locked
+        if trk is None or now - trk.t > 20.0:            # never acquired, or lost for too long
+            if trk is not None:                          # lost: re-acquire around the last estimate
+                self.cx, self.cy = trk.predict(now)
+                self.ct, self.locked = now, None
+            return None
+        x, y = trk.predict(now)
+        return Track("tracked", "vehicle", x, y, trk.vx, trk.vy, now, trk.hits)

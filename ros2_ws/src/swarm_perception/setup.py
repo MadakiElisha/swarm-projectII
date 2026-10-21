@@ -22,6 +22,7 @@ setup(
     license='MIT',
     entry_points={
         'console_scripts': [
+            'camera_compressor = swarm_perception.camera_compressor:main',
             'perception_node = swarm_perception.perception_node:main',
             'image_replay = swarm_perception.image_replay:main',
         ],

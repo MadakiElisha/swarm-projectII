@@ -15,7 +15,7 @@ jobs:
           python-version: "3.12"
       - run: pip install pytest pyyaml pymavlink flake8 matplotlib
       - name: lint
-        run: flake8 ros2_ws/src scripts
+        run: flake8 ros2_ws/src scripts perception
       - name: unit + scenario tests (CBBA, CRDTs, FSM, ORCA, MAVLink backend vs fake autopilot, 9 swarm scenarios)
         run: python -m pytest -q ros2_ws/src/swarm_common/tests ros2_ws/src/swarm_backends/tests
       - name: scenario report

@@ -202,6 +202,8 @@ class SwarmSim:
             from ..area import height_grid
             self._truth_grid = height_grid(fleet.area, cell=5.0, dilate=False)
         self.recorder = None          # optional swarm_common.sim.recorder.Recorder
+        self.realistic_detector = False   # True: quarry seen as plain "vehicle", no velocity
+        self.decoys: List[Tuple[float, float]] = []
 
     # ------------------------------------------------------------- scripting
     def at(self, t: float, fn: Callable[["SwarmSim"], None]):
@@ -328,9 +330,15 @@ class SwarmSim:
         if self.quarry is not None:
             q = self.quarry.at(self.t)
             if q and math.hypot(q[0] - v.x, q[1] - v.y) <= max(r, 400.0):
-                self.brains[i].on_detection(TARGET, q[0] + self.rnd.gauss(0, 2),
-                                            q[1] + self.rnd.gauss(0, 2), 0.9, self.t,
-                                            self.quarry.vx, self.quarry.vy)
+                # realistic mode: a detector only says "vehicle" and gives no velocity
+                cls, vx, vy = ("vehicle", 0.0, 0.0) if self.realistic_detector else \
+                              (TARGET, self.quarry.vx, self.quarry.vy)
+                self.brains[i].on_detection(cls, q[0] + self.rnd.gauss(0, 2),
+                                            q[1] + self.rnd.gauss(0, 2), 0.9, self.t, vx, vy)
+        for (dx, dy) in self.decoys:            # parked cars: also "vehicle"
+            if math.hypot(dx - v.x, dy - v.y) <= max(r, 400.0) and self.rnd.random() < 0.7:
+                self.brains[i].on_detection("vehicle", dx + self.rnd.gauss(0, 2),
+                                            dy + self.rnd.gauss(0, 2), 0.8, self.t)
 
     def _metrics(self):
         ids = [i for i, v in self.veh.items() if v.alive and v.alt > 2.0]

@@ -91,3 +91,47 @@ def test_brain_rtb_latch_clears_on_landing():
     assert f.state == RTL and f.latch == "brain RTB"
     f.tick(_obs(60.0, alt=0.0, armed=False, mode="RTL"), 60.0)
     assert f.state == GROUND and f.latch is None
+
+
+def test_slow_real_physics_takeoff_continues_instead_of_landing():
+    f = VehicleFSM(FsmCfg())
+    f.on_setpoint(Setpoint(0.0, SP_VEL, 1, 0, alt=42), 0.0)
+    f.tick(_obs(0.0, alt=0, armed=False, mode="STABILIZE"), 0.0)
+    acts = f.tick(_obs(0.1, alt=0, armed=False, mode="STABILIZE"), 0.1)
+    assert [a.kind for a in acts] == ["takeoff"]
+    # armed and spooling: no duplicate NAV_TAKEOFF
+    for k in range(1, 40):
+        f.on_setpoint(Setpoint(k, SP_VEL, 1, 0, alt=42), float(k))
+        assert not f.tick(_obs(float(k), alt=min(20.0, k * 0.4), armed=True), float(k))
+    # past the limit while still climbing: continue in GUIDED
+    f.on_setpoint(Setpoint(200.0, SP_VEL, 1, 0, alt=42), 200.0)
+    f.tick(_obs(200.0, alt=25.0, armed=True), 200.0)
+    assert f.state == GUIDED and f.latch is None
+
+
+def test_slow_prearm_keeps_retrying_and_climb_budget_starts_at_arming():
+    f = VehicleFSM(FsmCfg())
+    f.on_setpoint(Setpoint(0.0, SP_VEL, 1, 0, alt=30), 0.0)
+    f.tick(_obs(0.0, alt=0, armed=False, mode="STABILIZE"), 0.0)
+    sent = 0
+    for k in range(1, 121):                    # 2 min of "Gyros inconsistent"
+        f.on_setpoint(Setpoint(k, SP_VEL, 1, 0, alt=30), float(k))
+        sent += len(f.tick(_obs(float(k), alt=0, armed=False, mode="STABILIZE"), float(k)))
+    assert f.state == TAKEOFF and sent >= 10   # still trying, retried arming
+    for k in range(121, 200):                  # armed at 121, climbing slowly
+        f.on_setpoint(Setpoint(k, SP_VEL, 1, 0, alt=30), float(k))
+        f.tick(_obs(float(k), alt=(k - 121) * 0.3, armed=True), float(k))
+    assert f.state == TAKEOFF                  # 79 s after arming < 30 + 60 s budget
+    f.on_setpoint(Setpoint(205, SP_VEL, 1, 0, alt=30), 205.0)
+    f.tick(_obs(205.0, alt=26.0, armed=True), 205.0)
+    assert f.state == GUIDED
+
+
+def test_never_arms_gives_up_after_prearm_timeout():
+    f = VehicleFSM(FsmCfg())
+    for k in range(0, 200):
+        f.on_setpoint(Setpoint(k, SP_VEL, 1, 0, alt=30), float(k))
+        f.tick(_obs(float(k), alt=0, armed=False, mode="STABILIZE"), float(k))
+        if k > 0 and f.state == GROUND:
+            break
+    assert f.state == GROUND and any("never armed" in e for e in f.events)

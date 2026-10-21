@@ -2,6 +2,18 @@
 
 PERSON = "person"
 
+# COCO and VisDrone class names -> what the swarm brain reasons about
+SWARM_CLASS = {
+    "person": "person", "pedestrian": "person", "people": "person",
+    "car": "vehicle", "van": "vehicle", "truck": "vehicle", "bus": "vehicle", "motor": "vehicle",
+    "motorcycle": "vehicle", "tricycle": "vehicle", "awning-tricycle": "vehicle",
+    "bicycle": "bicycle", "boat": "boat",
+}
+
+
+def swarm_class(name: str) -> str:
+    return SWARM_CLASS.get(name, name)
+
 
 def filter_detections(raw_detections, min_confidence=0.5, classes=None):
     """Keep detections passing confidence + class filter, best first.

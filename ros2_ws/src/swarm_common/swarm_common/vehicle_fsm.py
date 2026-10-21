@@ -65,7 +65,8 @@ class FsmCfg:
     fence_center: Tuple[float, float] = (0.0, 0.0)
     brain_stale_s: float = 1.5
     brain_dead_s: float = 10.0
-    takeoff_timeout_s: float = 45.0
+    takeoff_timeout_s: float = 30.0     # climb budget once armed (+2 s per metre)
+    prearm_timeout_s: float = 180.0     # EKF/GPS/IMU warm-up can take minutes on real hardware
     resend_s: float = 3.0
     airborne_alt_m: float = 1.0
 
@@ -78,6 +79,7 @@ class VehicleFSM:
         self.since = 0.0
         self._last_send = -1e9
         self._takeoff_alt = 30.0
+        self._armed_at: Optional[float] = None
         self._sp: Optional[Setpoint] = None
         self._sp_rx = -1e9
         self.events: List[str] = []
@@ -135,11 +137,24 @@ class VehicleFSM:
         if self.state == TAKEOFF:
             if airborne and obs.alt >= 0.85 * self._takeoff_alt:
                 return self._enter(GUIDED, now, act=None)
-            if now - self.since > c.takeoff_timeout_s:
-                self.events.append("takeoff timed out")
-                return self._enter(LAND if airborne else GROUND, now,
-                                   act=Action("land") if airborne else None)
-            if now - self._last_send >= c.resend_s * 2:
+            # pre-arm checks (EKF, GPS, IMU consistency) can legitimately take a
+            # while; the climb budget only starts once the motors are armed
+            if obs.armed and self._armed_at is None:
+                self._armed_at = now
+            if not obs.armed:
+                self._armed_at = None
+                if now - self.since > c.prearm_timeout_s:
+                    self.events.append("takeoff failed: autopilot never armed")
+                    return self._enter(GROUND, now, act=None)
+            elif now - self._armed_at > c.takeoff_timeout_s + 2.0 * self._takeoff_alt:
+                if airborne:          # it is flying, just slowly: hand it to the mission
+                    self.events.append("takeoff slow - continuing in GUIDED")
+                    return self._enter(GUIDED, now, act=None)
+                self.events.append("takeoff failed: never left the ground")
+                return self._enter(GROUND, now, act=None)
+            # (re)send only while the vehicle has not armed; re-sending NAV_TAKEOFF
+            # to an armed, spooling vehicle is rejected by the autopilot
+            if not obs.armed and now - self._last_send >= c.resend_s * 3:
                 self._last_send = now
                 return [Action("takeoff", {"alt": self._takeoff_alt})]
             return []
@@ -196,6 +211,7 @@ class VehicleFSM:
         if state != self.state:
             self.events.append(f"{self.state} -> {state}" + (f" ({latch})" if latch else ""))
         self.state, self.since = state, now
+        self._armed_at = None
         if latch:
             self.latch = latch
         self._last_send = now if act else -1e9

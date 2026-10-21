@@ -20,7 +20,7 @@ from .coverage import CoverageGrid, next_waypoint, partition
 from .energy import DrainCalibrator, EnergyModel
 from .gossip import NeighborTable, Roster, RosterEntry
 from .motion import altitude_layer, arrived, avoid, limit_accel, preferred_velocity
-from .perception import Observation, WorldModel, footprint_radius
+from .perception import Observation, TargetTracker, Track, WorldModel, footprint_radius
 from .planner import Planner
 from .tasks import (DONE, FORMATION, GOTO, INTERCEPT, OPEN, RESCUE, SEARCH, SUGGESTED,
                     CANCELLED, Task, TaskRegistry, WorkItem, derive_work_items, ring_slot_xy)
@@ -36,6 +36,7 @@ MAX_OBS_PER_PACKET = 60
 TERMINAL_TASK_KEEP_S = 300.0
 CLAIM_SETTLE_S = 2.5          # hold a fresh claim this long before acting on it
 PERSON, TARGET = "person", "target"
+TRACK_CLASSES = {"target", "vehicle"}      # what an intercept may follow (sim sensor, detector)
 
 
 @dataclass
@@ -117,6 +118,8 @@ class DroneBrain:
         self._going_home = False
         self._formed: Dict[str, bool] = {}
         self._formed_since: Dict[str, float] = {}
+        self._tracks: Dict[str, Track] = {}
+        self._trackers: Dict[str, TargetTracker] = {}
         self._released_events = set()
         self._suggested_seen = set()
         self._vel = (0.0, 0.0)
@@ -389,8 +392,13 @@ class DroneBrain:
 
     def _centre(self, parent: Task, now: float):
         if parent.kind == INTERCEPT:
-            tr = self.world.moving_track(TARGET, now)
+            tk = self._trackers.get(parent.id)
+            if tk is None:             # the operator clicked on the target: that is the first fix
+                tk = self._trackers[parent.id] = TargetTracker(parent.x, parent.y, parent.created_t,
+                                                               TRACK_CLASSES)
+            tr = tk.update(self.world.obs.values(), now)
             if tr is not None:
+                self._tracks[parent.id] = tr
                 return tr.x, tr.y, tr.vx, tr.vy
             last = parent.params.get("last_fix")
             if last:
@@ -434,10 +442,9 @@ class DroneBrain:
                     reg.set_status(t.id, DONE, now)
                     self._log(f"{t.id}: area fully covered")
                     self._dirty = True
-            if t.kind == INTERCEPT:
-                tr = self.world.moving_track(TARGET, now)
-                if tr is not None:
-                    t.params["last_fix"] = [tr.x, tr.y]
+            if t.kind == INTERCEPT and t.id in self._tracks:
+                tr = self._tracks[t.id]
+                t.params["last_fix"] = [tr.x, tr.y]
         # perception -> RESCUE suggestions (deterministic ids => natural dedup)
         for tr in self.world.static_tracks(PERSON):
             near = [t for t in reg.tasks.values() if t.kind == RESCUE and

@@ -18,6 +18,7 @@ setup(
     license='MIT',
     entry_points={
         'console_scripts': [
+            'gz_quarry = swarm_tasks.gz_quarry:main',
             'target_mover = swarm_tasks.target_mover:main',
         ],
     },

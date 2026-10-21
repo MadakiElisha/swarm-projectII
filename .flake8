@@ -1,5 +1,5 @@
 [flake8]
-max-line-length = 110
+max-line-length = 125
 exclude = .git,__pycache__,build,install,log,ros2_ws/build,ros2_ws/install,ros2_ws/log
 # E731: short lambdas in launch files; W503/W504: line-break style
 extend-ignore = E731,W503,W504

@@ -311,7 +311,36 @@ def city_ops(seed=11, loss=0.1) -> ScenarioResult:
     return r
 
 
+def intercept_with_decoys(seed=12, loss=0.1) -> ScenarioResult:
+    """Pursuit with a realistic detector: the target is just "vehicle" (no velocity),
+    and 8 parked cars nearby are also "vehicle". The gated tracker must follow
+    the moving one."""
+    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim.realistic_detector = True
+    sim.quarry = Quarry(1000, 900, 3.0, 1.5, start=0.0, stop=400.0)
+    sim.decoys = [(1000 + 60 * k, 840 + 25 * (k % 3)) for k in range(8)]   # along the target's road
+    sim.at(2, lambda s: s.operator_task("INTERCEPT-2", 1000, 900, to={2}))
+    errs = []
+
+    def watch(s):
+        if 250 <= s.t <= 380 and abs(s.t % 5) < 1e-6:
+            q = s.quarry.at(s.t)
+            tr = s.brains[2]._tracks.get("INTERCEPT-2")
+            if tr is not None and q:
+                errs.append(math.hypot(tr.x - q[0], tr.y - q[1]))
+    sim.run(420, watch)
+    r = ScenarioResult("intercept_with_decoys", sim)
+    mean_err = sum(errs) / len(errs) if errs else 1e9
+    r.notes.append(f"mean track error vs true target: {mean_err:.0f} m over {len(errs)} samples "
+                   f"(8 decoy cars within 500 m)")
+    r.checks["track follows the moving car, not the parked ones (< 40 m)"] = mean_err < 40.0
+    r.checks["PERIMETER_FORMED around the moving target"] = "PERIMETER_FORMED" in sim.event_names("INTERCEPT-2")
+    r.checks["no sustained double execution"] = sim.longest_conflict() <= MAX_CONFLICT_S
+    return r
+
+
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
+    "intercept_with_decoys": intercept_with_decoys,
     "city_ops": city_ops,
     "miscalibrated_batteries": miscalibrated_batteries,
     "single_dispatch": single_dispatch,
