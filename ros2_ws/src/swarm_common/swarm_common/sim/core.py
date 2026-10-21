@@ -195,6 +195,7 @@ class SwarmSim:
         self.track: Dict[int, List[Tuple[float, float, float, float]]] = {i: [] for i in self.brains}
         self.auto_confirm = False
         self._next_sense = 0.0
+        self.recorder = None          # optional swarm_common.sim.recorder.Recorder
 
     # ------------------------------------------------------------- scripting
     def at(self, t: float, fn: Callable[["SwarmSim"], None]):
@@ -294,9 +295,13 @@ class SwarmSim:
         for v in self.veh.values():
             v.step(dt)
         self._metrics()
+        if self.recorder is not None:
+            self.recorder.on_step(self, now)
         self.t = round(now + dt, 6)
 
     def _broadcast(self, src: int, pkt: dict):
+        if self.recorder is not None:
+            self.recorder.on_packet(self.t, src, pkt)
         self.packets_sent += 1
         self.bytes_sent += _approx_size(pkt)
         for dst in self.brains:

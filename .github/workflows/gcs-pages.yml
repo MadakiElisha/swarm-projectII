@@ -1,0 +1,27 @@
+# Publish the web GCS (replay of the recorded showcase mission) to GitHub Pages.
+# One-time setup by the repo owner: Settings -> Pages -> Source: "GitHub Actions".
+# Then run it from the Actions tab ("Publish GCS demo" -> Run workflow).
+name: Publish GCS demo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: gcs
+      - id: deployment
+        uses: actions/deploy-pages@v4

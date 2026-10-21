@@ -1,0 +1,91 @@
+{
+ "origin": [
+  6.5244,
+  3.3792
+ ],
+ "drones": [
+  {
+   "id": 1,
+   "label": "D1",
+   "home": [
+    6.5244,
+    3.3792
+   ]
+  },
+  {
+   "id": 2,
+   "label": "D2",
+   "home": [
+    6.53,
+    3.385
+   ]
+  },
+  {
+   "id": 3,
+   "label": "D3",
+   "home": [
+    6.536,
+    3.391
+   ]
+  },
+  {
+   "id": 4,
+   "label": "D4",
+   "home": [
+    6.542,
+    3.397
+   ]
+  },
+  {
+   "id": 5,
+   "label": "D5",
+   "home": [
+    6.548,
+    3.403
+   ]
+  }
+ ],
+ "swarm": {
+  "radio_range_m": 3500.0,
+  "energy": {
+   "pct_per_m": 0.005,
+   "pct_per_s_hover": 0.025,
+   "pct_per_mps_wind_per_km": 0.3,
+   "reserve_pct": 20.0,
+   "critical_pct": 12.0
+  },
+  "motion": {
+   "cruise_speed_mps": 10.0,
+   "max_accel_mps2": 3.0,
+   "base_alt_m": 30.0,
+   "layer_spacing_m": 6.0,
+   "layers": 5,
+   "safety_radius_m": 6.0,
+   "orca_horizon_s": 6.0,
+   "arrive_radius_m": 15.0
+  },
+  "formation": {
+   "max_slots": 5,
+   "ring_radius_m": 300.0,
+   "ring_period_s": 480.0,
+   "on_station_band_m": 60.0,
+   "hold_s": 180.0,
+   "lead_time_s": 6.0
+  },
+  "perception": {
+   "hfov_deg": 78.0,
+   "vfov_deg": 49.0,
+   "gimbal_pitch_deg": -90.0,
+   "fuse_radius_m": 25.0,
+   "target_track_window_s": 8.0
+  },
+  "coverage": {
+   "cell_m": 40.0,
+   "search_alt_m": 70.0
+  },
+  "geofence": {
+   "radius_m": 8000.0,
+   "max_alt_m": 120.0
+  }
+ }
+}

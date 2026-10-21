@@ -72,6 +72,7 @@ class RosterEntry:
     task: str = ""           # work item currently executed
     airborne: bool = False
     available: bool = True   # willing to accept work
+    drain: float = 1.0       # learned battery drain vs model (energy calibration)
 
     def to_wire(self) -> dict:
         return asdict(self)
@@ -90,10 +91,12 @@ class Roster:
 
     def merge(self, wire: List[dict]) -> bool:
         changed = False
+        known = set(RosterEntry.__dataclass_fields__)
         for d in wire:
             try:
-                changed |= self.update(RosterEntry(**d))
-            except TypeError:
+                # ignore fields from newer peers instead of dropping the entry
+                changed |= self.update(RosterEntry(**{k: v for k, v in d.items() if k in known}))
+            except (TypeError, AttributeError):
                 continue
         return changed
 

@@ -116,18 +116,40 @@ deploy/docker/netem.sh split "drone1 drone2" "drone3 drone4 drone5"
 deploy/docker/netem.sh heal
 ```
 
-## 4. Operating it (web GCS)
+## 4. The web GCS
 
-| action | what happens |
+A CesiumJS 3D ground station that shows **what the swarm is thinking**, not just where it is.
+
+```bash
+cd gcs && python3 -m http.server 8080        # open http://localhost:8080
+```
+
+With no swarm running, it plays the recorded showcase mission (`gcs/demos/showcase.json`). Seven drones
+launch together, search a flood zone, fuse sightings and rescue, form a perimeter, lose a drone (a spare
+takes its slot), then intercept a moving target. With rosbridge up it goes **live** and decodes the
+drones' own gossip packets from `/swarm/radio`.
+
+| layer | what it shows |
 |---|---|
-| click map → Dispatch | GOTO task; the nearest drone that can afford it wins by consensus, flies, holds, completes |
-| `SWARM converge` → click | ring of up to 5 slots, allocated by CBBA, rotating; `PERIMETER_FORMED` banner; auto-release after the hold |
-| `INTERCEPT` → click | ring centred on the fused track of the moving quarry; two cutters lead-pursue |
-| `SEARCH area` → two clicks | idle drones split the rectangle, sweep it at search altitude, and raise survivor suggestions |
-| pulsing amber marker | perception suggestion; **Confirm** turns it into a RESCUE task (human-in-the-loop) |
-| RTL / LAND / E-STOP / RESUME | operator overrides via the vehicle FSM (latched until RESUME); `ALL` targets every drone |
+| Links · Packets | measured radio links (colour = packet-receipt ratio), beacons and gossip packets in flight |
+| Consensus | every work item, the drone(s) each brain believes holds it; amber = drones still disagree, green = agreed |
+| Avoidance | ORCA bubbles when drones on one altitude layer get close |
+| Coverage | the searched-cells G-Set filling in |
+| Sensors | camera footprints, the selected drone's frustum, every drone's sightings |
+| Target | fused constant-velocity track with uncertainty and a 30 s prediction (plus sim ground truth) |
+| Fleet panel | phase, task, battery with a "needed to get home" marker, learned drain ×, links, FSM locks |
+| Swarm mind | tasks with per-slot consensus state and an event feed (claims, handovers, losses, perimeter events) |
 
-Mesh lines show **measured** link quality (packet-receipt ratio): blue > 80%, amber > 50%, red below.
+Drones bank and pitch from their real acceleration, props spin with throttle, a lost drone falls.
+Timeline scrubbing replays any moment. Click a drone to select it and double-click to ride along.
+Live mode adds operator tools (Dispatch, Perimeter, Intercept, Search area, RTL/LAND/RESUME/E-STOP, ALL).
+
+* `?replay=demos/x.json` · `?live=ws://host:9090` · `?lite=1` (phones/weak GPUs) · `?t=500` (start time)
+* Settings ⚙: paste a free [Cesium ion](https://ion.cesium.com) token for world terrain + 3D buildings.
+* Record your own mission: `python3 scripts/record_demo.py` (any simulator scenario can be recorded).
+* Publish the replay at a public link: enable GitHub Pages (Source: GitHub Actions), then run the
+  **Publish GCS demo** workflow.
+* The previous 2D/three.js page is kept as `gcs/legacy.html`.
 
 ## 5. Testing
 

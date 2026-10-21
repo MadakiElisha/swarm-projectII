@@ -263,7 +263,8 @@ class DroneBrain:
 
         # ---------------- my roster entry (the only one I ever write)
         self.roster.update(RosterEntry(self.id, now, s.x, s.y, s.alt, s.vx, s.vy, s.battery,
-                                       self.phase, self._cur_item, airborne, available))
+                                       self.phase, self._cur_item, airborne, available,
+                                       round(self.energy.scale, 3)))
         self._mission_events(now, out)
 
         # ---------------- radio

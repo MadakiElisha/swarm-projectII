@@ -22,6 +22,7 @@ if ros2 pkg prefix rosbridge_server >/dev/null 2>&1; then
 else
     echo "rosbridge_server not installed: GCS will not connect (apt install ros-jazzy-rosbridge-suite)"
 fi
+python3 "$ROOT/scripts/fleet_info.py" --json > "$ROOT/gcs/fleet.json"
 ( cd "$ROOT/gcs" && nohup python3 -m http.server 8080 > "$LOG/gcs.log" 2>&1 & )
 sleep 10
 echo "--- health ---"
