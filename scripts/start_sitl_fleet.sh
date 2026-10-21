@@ -20,7 +20,8 @@ while read -r id label lat lon url; do
     inst=$(( (port - 5760) / 10 ))
     echo "[fleet] $label: SITL instance $inst sysid $id tcp:$port home $lat,$lon"
     ( cd "$LOGDIR" && setsid nohup "$BIN" -I"$inst" --sysid "$id" --model + --speedup 1 \
-        --defaults "$DEFAULTS" --home "$lat,$lon,20,0" > "$LOGDIR/$label.log" 2>&1 < /dev/null & )
+        --defaults "$DEFAULTS" --home "$lat,$lon,20,0" > "$LOGDIR/$label.log" 2>&1 < /dev/null & ) \
+        > /dev/null 2>&1    # never inherit the caller's stdout (keeps pipes like | tee from hanging)
     n=$((n + 1))
     sleep 0.5
 done < <(python3 "$ROOT/scripts/fleet_info.py" "${1:-}")
