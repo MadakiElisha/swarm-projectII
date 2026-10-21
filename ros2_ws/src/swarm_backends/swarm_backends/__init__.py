@@ -1,6 +1,16 @@
-from .adapter import VehicleAdapter, TelemetryFrame, CommandRequest, CommandStatus, Capabilities
-from .mavlink_backend import MavlinkBackend
-from .sim_backend import SimBackend
+from .adapter import (Capabilities, CommandRequest, CommandStatus, TelemetryFrame,
+                      VehicleAdapter, VehicleSnapshot, VehicleType)
 
-__all__ = ['VehicleAdapter', 'TelemetryFrame', 'CommandRequest', 'CommandStatus', 
-           'Capabilities', 'MavlinkBackend', 'SimBackend']
+__all__ = ["Capabilities", "CommandRequest", "CommandStatus", "TelemetryFrame",
+           "VehicleAdapter", "VehicleSnapshot", "VehicleType", "MavlinkBackend", "SimBackend"]
+
+
+def __getattr__(name):
+    # lazy imports: SimBackend needs swarm_common, MavlinkBackend needs pymavlink
+    if name == "MavlinkBackend":
+        from .mavlink_backend import MavlinkBackend
+        return MavlinkBackend
+    if name == "SimBackend":
+        from .sim_backend import SimBackend
+        return SimBackend
+    raise AttributeError(name)

@@ -1,10 +1,17 @@
 <?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>swarm_agents</name>
-  <version>0.1.0</version>
-  <description>Per-drone decentralized mini-agents</description>
-  <maintainer email="stefannelisha@gmail.com">madakie</maintainer>
+  <version>0.2.0</version>
+  <description>Per-drone decentralized brain (CBBA, gossip, motion, world model)</description>
+  <maintainer email="stefannelisha@gmail.com">Madaki Elisha</maintainer>
   <license>MIT</license>
   <buildtool_depend>ament_python</buildtool_depend>
-  <export><build_type>ament_python</build_type></export>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>swarm_interfaces</exec_depend>
+  <exec_depend>swarm_common</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 </package>

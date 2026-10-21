@@ -12,7 +12,19 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
 
-DEFAULT = os.path.join(os.path.dirname(__file__), '..', 'assets')
+
+def _default_assets():
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        d = os.path.join(get_package_share_directory('swarm_perception'), 'assets')
+        if os.path.isdir(d):
+            return d
+    except Exception:
+        pass
+    return os.path.join(os.path.dirname(__file__), '..', 'assets')
+
+
+DEFAULT = _default_assets()
 
 
 class ImageReplay(Node):

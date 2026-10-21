@@ -4,8 +4,8 @@ package_name = 'swarm_mesh'
 
 setup(
     name=package_name,
-    version='0.1.0',
-    packages=find_packages(exclude=['test']),
+    version='0.2.0',
+    packages=find_packages(exclude=['test', 'tests']),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
@@ -14,12 +14,11 @@ setup(
     zip_safe=True,
     maintainer='Madaki Elisha',
     maintainer_email='stefannelisha@gmail.com',
-    description='Mesh builder node',
+    description='GCS-side mesh visualisation from per-drone neighbour reports',
     license='MIT',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'mesh_builder = swarm_mesh.mesh_builder:main',
+            'mesh_observer = swarm_mesh.mesh_observer:main',
         ],
     },
 )

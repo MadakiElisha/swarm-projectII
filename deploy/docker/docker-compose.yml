@@ -1,0 +1,27 @@
+# Five drones, each in its own container on a shared virtual network.
+#   docker compose -f deploy/docker/docker-compose.yml up --build
+#   deploy/docker/netem.sh loss  drone3 30%      # 30% packet loss on drone3's radio
+#   deploy/docker/netem.sh delay drone3 200ms
+#   deploy/docker/netem.sh split "drone1 drone2" "drone3 drone4 drone5"
+#   deploy/docker/netem.sh heal
+# Then drive it from the host: python3 scripts/ros_acceptance.py (same ROS_DOMAIN_ID).
+x-drone: &drone
+  build: {context: ../.., dockerfile: deploy/docker/Dockerfile}
+  image: swarm-drone:latest
+  cap_add: [NET_ADMIN]          # needed for tc netem / iptables inside the container
+  environment: &env
+    ROS_DOMAIN_ID: "21"
+    BACKEND: sim
+  networks: [mesh]
+  restart: "no"
+
+services:
+  drone1: {<<: *drone, hostname: drone1, environment: {<<: *env, DRONE_ID: "1"}}
+  drone2: {<<: *drone, hostname: drone2, environment: {<<: *env, DRONE_ID: "2"}}
+  drone3: {<<: *drone, hostname: drone3, environment: {<<: *env, DRONE_ID: "3"}}
+  drone4: {<<: *drone, hostname: drone4, environment: {<<: *env, DRONE_ID: "4"}}
+  drone5: {<<: *drone, hostname: drone5, environment: {<<: *env, DRONE_ID: "5"}}
+  gcs:    {<<: *drone, hostname: gcs,    environment: {<<: *env, ROLE: gcs}}
+
+networks:
+  mesh: {driver: bridge}

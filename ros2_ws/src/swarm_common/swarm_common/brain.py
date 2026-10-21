@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from .cbba import CBBA, NONE
+from .cbba import CBBA
 from .config import Fleet
 from .coverage import CoverageGrid, next_waypoint, partition
 from .energy import EnergyModel

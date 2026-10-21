@@ -1,46 +1,34 @@
 #!/usr/bin/env bash
-# SITL fleet v5: detached, stdin-keepalive, port-safe, self-verifying,
-# and DEATH-INSTRUMENTED: a wrapper logs the exact exit code of each daemon.
-BIN="$HOME/ardupilot/build/sitl/bin/arducopter"
-DEFAULTS="$HOME/ardupilot/Tools/autotest/default_params/copter.parm"
-LOGDIR="$HOME/swarm-projectII/swarm-project/logs/sitl"
+# Start one ArduCopter SITL per drone in fleet.yaml (no MAVProxy needed).
+#   ARDUPILOT_HOME=~/ardupilot scripts/start_sitl_fleet.sh [fleet.yaml]
+# SITL instance i listens on tcp 5760+10*i, so fleet.yaml's
+# tcp:127.0.0.1:5770 -> instance 1, 5780 -> instance 2, ...
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+AP="${ARDUPILOT_HOME:-$HOME/ardupilot}"
+BIN="${SITL_BIN:-$AP/build/sitl/bin/arducopter}"
+DEFAULTS="${SITL_DEFAULTS:-$AP/Tools/autotest/default_params/copter.parm}"
+LOGDIR="$ROOT/logs/sitl"
 mkdir -p "$LOGDIR"
+[ -x "$BIN" ] || { echo "arducopter SITL binary not found at $BIN (set ARDUPILOT_HOME or SITL_BIN)"; exit 1; }
 
-pkill -f "arducopter|MAVProxy" 2>/dev/null
-for p in 5770 5780 5790 5800 5810; do
-    for _ in $(seq 1 15); do ss -tln | grep -q ":$p " || break; sleep 1; done
+pkill -f "$BIN" 2>/dev/null; sleep 1
+n=0
+while read -r id label lat lon url; do
+    port="${url##*:}"
+    case "$url" in tcp:127.0.0.1:*|tcp:localhost:*) ;; *) echo "skip $label: $url is not a local SITL url"; continue;; esac
+    inst=$(( (port - 5760) / 10 ))
+    echo "[fleet] $label: SITL instance $inst sysid $id tcp:$port home $lat,$lon"
+    ( cd "$LOGDIR" && setsid nohup "$BIN" -I"$inst" --sysid "$id" --model + --speedup 1 \
+        --defaults "$DEFAULTS" --home "$lat,$lon,20,0" > "$LOGDIR/$label.log" 2>&1 < /dev/null & )
+    n=$((n + 1))
+    sleep 0.5
+done < <(python3 "$ROOT/scripts/fleet_info.py" "${1:-}")
+
+for attempt in 1 2 3 4 5 6; do
+    sleep 3
+    alive=$(pgrep -fc "$BIN" || true)
+    echo "[fleet] check $attempt: $alive/$n SITL processes"
+    [ "$alive" -ge "$n" ] && { echo "[fleet] HEALTHY ($n drones). EKF needs ~30 s before arming."; exit 0; }
 done
-
-HOMES=(
-  "6.5244,3.3792,20,0"
-  "6.5300,3.3850,20,0"
-  "6.5360,3.3910,20,0"
-  "6.5420,3.3970,20,0"
-  "6.5480,3.4030,20,0"
-)
-
-for i in 1 2 3 4 5; do
-    idx=$((i - 1))
-    FIFO="$LOGDIR/.stdin_D$i"; rm -f "$FIFO"; mkfifo "$FIFO"
-    LOG="$LOGDIR/D$i.log"; : > "$LOG"
-    echo "[fleet] starting D$i (instance=$i sysid=$i tcp=$((5760 + 10 * i)))"
-    setsid nohup bash -c '
-        fifo="$1"; log="$2"; shift 2
-        "$@" 0<>"$fifo" >>"$log" 2>&1
-        code=$?
-        echo "[wrapper] $(date +%T) EXITED code=$code" >>"$log"
-    ' _ "$FIFO" "$LOG" "$BIN" -I"$i" --sysid "$i" \
-        --model "+" --defaults "$DEFAULTS" --home "${HOMES[$idx]}" </dev/null &
-    sleep 1
-done
-
-echo "[fleet] launched - verifying..."
-alive=0
-for attempt in 1 2 3 4; do
-    sleep 5
-    alive=$(pgrep -c arducopter 2>/dev/null); alive=${alive:-0}
-    echo "[fleet] check $attempt: processes=$alive/5"
-    [ "$alive" = "5" ] && break
-done
-[ "$alive" = "5" ] && echo "[fleet] HEALTHY at $((20))s mark." || \
-  for i in 1 2 3 4 5; do echo "--- D$i ---"; tail -n 4 "$LOGDIR/D$i.log"; done
+echo "[fleet] not all SITL instances are running; see $LOGDIR"; exit 1

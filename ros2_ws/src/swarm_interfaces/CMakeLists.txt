@@ -11,14 +11,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MeshTopology.msg"
   "msg/TaskRequest.msg"
   "msg/TaskAssignment.msg"
-  "msg/MissionStatus.msg"
   "msg/MissionEvent.msg"
   "msg/TargetTrack.msg"
-  "msg/TaskComplete.msg"
   "msg/Detection.msg"
   "msg/DetectionArray.msg"
   "msg/DroneCommand.msg"
-  "msg/TaskRelinquish.msg"
+  "msg/SwarmPacket.msg"
+  "msg/VehicleState.msg"
+  "msg/Setpoint.msg"
+  "msg/NeighborReport.msg"
   DEPENDENCIES std_msgs
 )
 

@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 from ..brain import DroneBrain, OwnState, PERSON, TARGET
 from ..config import Fleet
 from ..perception import footprint_radius
-from ..vehicle_fsm import FsmCfg, VehicleFSM, VehicleObs, GROUND, ESTOP, RTL, LAND
+from ..vehicle_fsm import FsmCfg, VehicleFSM, VehicleObs
 
 
 # ---------------------------------------------------------------- vehicle
@@ -354,7 +354,8 @@ class SwarmSim:
         if worst > 1:
             self.conflict_samples += 1
             if len(self.conflict_log) < 50:
-                self.conflict_log.append((round(self.t, 1), *[(k, v) for k, v in holders.items() if v > 1][0]))
+                item, n = next((k, v) for k, v in holders.items() if v > 1)
+                self.conflict_log.append((round(self.t, 1), item, n))
         self.max_conflict = max(self.max_conflict, worst)
 
     # --------------------------------------------------------------- queries

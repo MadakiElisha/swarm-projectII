@@ -1,38 +1,46 @@
 #!/usr/bin/env python3
-"""Renders the acceptance figure from a regression CSV."""
-import sys, csv, warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+"""Acceptance figure from a ros_acceptance.py CSV: altitude, battery, phases, events."""
+import csv
+import sys
+import warnings
+
 import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+PHASES = ["LANDED", "IDLE", "CLAIMING", "ENROUTE", "ON_TASK", "ON_STATION", "SEARCH", "RTB", "FAILSAFE"]
+
 
 def main():
-    csv_path = sys.argv[1]
-    png = sys.argv[2] if len(sys.argv) > 2 else csv_path.replace('.csv', '.png')
-    rows = list(csv.DictReader(open(csv_path)))
-    labels = sorted({r['label'] for r in rows if r['kind'] == 'telem' and r['label']})
+    path = sys.argv[1]
+    png = sys.argv[2] if len(sys.argv) > 2 else path.replace(".csv", ".png")
+    rows = list(csv.DictReader(open(path)))
+    labels = sorted({r["label"] for r in rows if r["kind"] == "telem"}, key=lambda s: int(s[1:]))
     fig, ax = plt.subplots(3, 1, figsize=(11, 9), sharex=True)
-    for L in labels:
-        tr = [r for r in rows if r['kind'] == 'telem' and r['label'] == L]
-        ax[0].plot([float(r['t']) for r in tr], [float(r['alt']) for r in tr], label=L, lw=1)
-        ax[2].plot([float(r['t']) for r in tr], [float(r['batt']) for r in tr], lw=1)
-        sr = [r for r in rows if r['kind'] == 'status' and r['label'] == L]
-        ax[1].plot([float(r['t']) for r in sr], [float(r['dist']) for r in sr], lw=1)
-    ax[1].axhline(120, color='r', ls='--', lw=1, label='criterion: ON_STATION band 120 m')
-    for e in [r for r in rows if r['kind'] == 'event']:
-        ev = e.get('event') or ''
-        c = 'g' if 'FORMED' in ev else ('orange' if 'DEGRADED' in ev else 'gray')
-        try:
-            t = float(e['t'])
-        except ValueError:
-            continue
-        for a in ax: a.axvline(t, color=c, ls=':', lw=1)
-        ax[0].annotate(ev, (t + 1, ax[0].get_ylim()[1] * 0.85), fontsize=8, color=c)
-    ax[0].set_title('Regression acceptance run'); ax[0].set_ylabel('altitude (m)')
-    ax[1].set_ylabel('|dist - R| (m)'); ax[2].set_ylabel('battery (%)'); ax[2].set_xlabel('t (s)')
-    ax[0].legend(ncol=5, fontsize=8); ax[1].legend(fontsize=8)
-    fig.tight_layout(); fig.savefig(png, dpi=110)
-    print(f'GRAPH: {png}')
+    for lab in labels:
+        tr = [r for r in rows if r["kind"] == "telem" and r["label"] == lab]
+        ax[0].plot([float(r["t"]) for r in tr], [float(r["alt"]) for r in tr], lw=1, label=lab)
+        ax[1].plot([float(r["t"]) for r in tr], [float(r["batt"]) for r in tr], lw=1)
+        ph = [r for r in rows if r["kind"] == "phase" and r["label"] == lab]
+        ax[2].plot([float(r["t"]) for r in ph],
+                   [PHASES.index(r["phase"]) if r["phase"] in PHASES else -1 for r in ph],
+                   lw=1, drawstyle="steps-post")
+    for e in (r for r in rows if r["kind"] == "event"):
+        c = "g" if "FORMED" in e["event"] else ("orange" if "DEGRADED" in e["event"] else "gray")
+        for a in ax:
+            a.axvline(float(e["t"]), color=c, ls=":", lw=1)
+    ax[0].set_title("Swarm acceptance run")
+    ax[0].set_ylabel("altitude (m)")
+    ax[1].set_ylabel("battery (%)")
+    ax[2].set_yticks(range(len(PHASES)), PHASES, fontsize=7)
+    ax[2].set_xlabel("t (s)")
+    ax[0].legend(ncol=6, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(png, dpi=110)
+    print(f"GRAPH: {png}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

@@ -1,4 +1,4 @@
-from swarm_common.vehicle_fsm import (ESTOP, GROUND, GUIDED, HOLD, LAND, RTL, TAKEOFF, FsmCfg,
+from swarm_common.vehicle_fsm import (ESTOP, GROUND, GUIDED, HOLD, RTL, TAKEOFF, FsmCfg,
                                       SP_RTB, SP_VEL, Setpoint, VehicleFSM, VehicleObs)
 
 

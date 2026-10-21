@@ -8,7 +8,7 @@
   leaves or dies, every survivor recomputes and the gap is re-covered.
 """
 import math
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 Cell = Tuple[int, int]
 

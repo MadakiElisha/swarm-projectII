@@ -1,0 +1,62 @@
+name: swarm-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    name: core tests + simulator scenarios
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest pyyaml pymavlink flake8 matplotlib
+      - name: lint
+        run: flake8 ros2_ws/src scripts
+      - name: unit + scenario tests (CBBA, CRDTs, FSM, ORCA, MAVLink backend vs fake autopilot, 9 swarm scenarios)
+        run: python -m pytest -q ros2_ws/src/swarm_common/tests ros2_ws/src/swarm_backends/tests
+      - name: scenario report
+        run: |
+          cd ros2_ws/src/swarm_common
+          python -m swarm_common.sim | tee ../../../scenario_report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scenario-report
+          path: scenario_report.txt
+
+  ros:
+    name: ROS 2 build + live swarm acceptance
+    runs-on: ubuntu-24.04
+    container: ros:jazzy-ros-base
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: |
+          apt-get update
+          apt-get install -y python3-pip python3-yaml
+          pip3 install --break-system-packages pymavlink matplotlib
+      - name: colcon build
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd ros2_ws && colcon build --event-handlers console_cohesion+
+      - name: acceptance (sim backend, 10% emulated packet loss)
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source ros2_ws/install/setup.bash
+          export ROS_DOMAIN_ID=7
+          mkdir -p reports
+          ros2 launch swarm_bringup swarm_sim.launch.py loss:=0.1 > reports/swarm.log 2>&1 &
+          sleep 20
+          python3 scripts/ros_acceptance.py --csv reports/ci_run.csv
+          python3 scripts/regression_plot.py reports/ci_run.csv reports/ci_run.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ros-acceptance
+          path: reports/

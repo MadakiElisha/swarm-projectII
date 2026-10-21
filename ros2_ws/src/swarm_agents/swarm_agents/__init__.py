@@ -1,2 +1,1 @@
-from .agent_core import Belief, DroneAgent, Relinquish, ReturnHome
-__all__ = ['Belief', 'DroneAgent', 'Relinquish', 'ReturnHome']
+"""Per-drone autonomy node (ROS shell around swarm_common.brain.DroneBrain)."""

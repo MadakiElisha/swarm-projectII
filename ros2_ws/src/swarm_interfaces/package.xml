@@ -3,7 +3,7 @@
   <name>swarm_interfaces</name>
   <version>0.1.0</version>
   <description>Typed message definitions for the drone swarm</description>
-  <maintainer email="stefannelisha@gmail.com">Your Name</maintainer>
+  <maintainer email="stefannelisha@gmail.com">Madaki Elisha</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

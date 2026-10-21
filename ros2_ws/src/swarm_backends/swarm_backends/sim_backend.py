@@ -1,97 +1,90 @@
-"""SimBackend: kinematic simulator for testing without real drones."""
-import math
-import time
-import threading
-from typing import Iterator
+"""SimBackend: kinematic vehicle for running the full ROS stack without SITL.
 
-from .adapter import (
-    VehicleAdapter, TelemetryFrame, CommandRequest, CommandStatus,
-    Capabilities, VehicleType
-)
+Uses the same point-mass model as the ROS-free simulator, so the ROS smoke
+test and the pure scenarios exercise identical vehicle behaviour.
+"""
+import math
+import threading
+import time
+from typing import Optional
+
+from swarm_common.geo import Origin
+from swarm_common.sim.core import SimVehicle
+from swarm_common.vehicle_fsm import Action
+
+from .adapter import Capabilities, CommandStatus, VehicleAdapter, VehicleSnapshot
 
 
 class SimBackend(VehicleAdapter):
-    def __init__(self, lat: float, lon: float, wind_speed: float = 0.0):
-        self.lat = lat
-        self.lon = lon
-        self.alt = 0.0
-        self.battery_pct = 100.0
-        self.yaw = 0.0
-        self.target_lat = lat
-        self.target_lon = lon
-        self.target_alt = 0.0
-        self.wind_speed = wind_speed  # m/s
-        self.wind_dir = 0.0  # radians
-        self._stop = False
+    def __init__(self, home_lat: float, home_lon: float, origin: Origin,
+                 rtl_alt_m: float = 20.0, rate_hz: float = 20.0, battery_pct: float = 100.0):
+        self.origin = origin
+        hx, hy = origin.to_enu(home_lat, home_lon)
+        self.home = (home_lat, home_lon)
+        self.v = SimVehicle(hx, hy, (hx, hy), rtl_alt=rtl_alt_m, battery=battery_pct)
         self._lock = threading.Lock()
-        threading.Thread(target=self._physics_loop, daemon=True).start()
-    
-    def _physics_loop(self):
-        while not self._stop:
+        self._stop = threading.Event()
+        self._dt = 1.0 / rate_hz
+        threading.Thread(target=self._loop, name="sim-physics", daemon=True).start()
+
+    def _loop(self):
+        last = time.time()
+        while not self._stop.is_set():
+            now = time.time()
             with self._lock:
-                if self.target_alt > 0:
-                    # climb/descent
-                    dz = self.target_alt - self.alt
-                    self.alt += 0.5 * math.copysign(min(abs(dz), 5), dz)
-                
-                if self.target_lat != self.lat or self.target_lon != self.lon:
-                    # move toward target
-                    dlat = self.target_lat - self.lat
-                    dlon = self.target_lon - self.lon
-                    dist = math.sqrt(dlat**2 + dlon**2)
-                    if dist > 1e-6:
-                        speed = 5.0 / 111000  # 5 m/s in degrees
-                        self.lat += speed * dlat / dist
-                        self.lon += speed * dlon / dist
-                        self.yaw = math.atan2(dlon, dlat)
-                    
-                    # wind drift
-                    if self.wind_speed > 0:
-                        drift = self.wind_speed * 0.1 / 111000
-                        self.lat += drift * math.cos(self.wind_dir)
-                        self.lon += drift * math.sin(self.wind_dir)
-                
-                # battery drain when moving
-                if self.alt > 0 or self.target_lat != self.lat:
-                    self.battery_pct = max(0, self.battery_pct - 0.05)
-            time.sleep(0.1)
-    
-    def capabilities(self) -> Capabilities:
-        return Capabilities(
-            vehicle_type=VehicleType.MULTICOPTER,
-            can_goto=True, can_rtl=True, can_land=True
-        )
-    
-    def telemetry(self) -> Iterator[TelemetryFrame]:
-        while not self._stop:
-            with self._lock:
-                frame = TelemetryFrame(
-                    lat=self.lat, lon=self.lon, alt=self.alt,
-                    battery_pct=self.battery_pct,
-                    roll=0.0, pitch=0.0, yaw=self.yaw,
-                    timestamp=time.time())
-            yield frame          # OUTSIDE the lock - never yield while holding it
-            time.sleep(0.1)
-    
-    def execute(self, cmd: CommandRequest) -> CommandStatus:
-        cmd_str = cmd.command.lower()
+                self.v.step(min(0.2, now - last))
+            last = now
+            self._stop.wait(self._dt)
+
+    def _apply(self, kind: str, **params) -> CommandStatus:
         with self._lock:
-            if cmd_str == 'arm':
-                pass
-            elif cmd_str == 'takeoff':
-                self.target_alt = cmd.params.get('alt', 30)
-            elif cmd_str == 'goto':
-                self.target_lat = cmd.params['lat']
-                self.target_lon = cmd.params['lon']
-                self.target_alt = cmd.params.get('alt', 30)
-            elif cmd_str == 'rtl':
-                self.target_lat = self.lat  # stay put for now
-                self.target_alt = 0.0
-            elif cmd_str == 'land':
-                self.target_alt = 0.0
-            else:
-                return CommandStatus.denied(f"unknown command {cmd.command}")
+            self.v.apply(Action(kind, params))
         return CommandStatus.ok()
-    
+
+    # ----------------------------------------------------------- interface
+    def capabilities(self) -> Capabilities:
+        return Capabilities()
+
+    def snapshot(self) -> VehicleSnapshot:
+        with self._lock:
+            v = self.v
+            lat, lon = self.origin.to_latlon(v.x, v.y)
+            mode = {"RTL": "RTL", "LAND": "LAND", "GUIDED": "GUIDED"}.get(v.mode, "STABILIZE")
+            yaw_ned = math.atan2(v.vx, v.vy) if math.hypot(v.vx, v.vy) > 0.5 else 0.0
+            return VehicleSnapshot(time.time(), True, lat, lon, v.alt, v.vy, v.vx, 0.0,
+                                   v.battery, v.armed, mode, 0.0, 0.0, yaw_ned,
+                                   home_lat=self.home[0], home_lon=self.home[1])
+
+    def takeoff(self, alt_m: float) -> CommandStatus:
+        with self._lock:
+            if self.v.battery <= 0:
+                return CommandStatus.denied("battery empty")
+        return self._apply("takeoff", alt=alt_m)
+
+    def velocity(self, vn, ve, vd, yaw: Optional[float] = None) -> CommandStatus:
+        with self._lock:
+            alt = self.v.alt - vd * 1.0          # integrate the climb request over ~1 s
+        return self._apply("velocity", vx=ve, vy=vn, alt=max(0.0, alt))
+
+    def goto(self, lat, lon, alt_m) -> CommandStatus:
+        x, y = self.origin.to_enu(lat, lon)
+        return self._apply("position", x=x, y=y, alt=alt_m)
+
+    def hold(self) -> CommandStatus:
+        return self._apply("hold")
+
+    def rtl(self) -> CommandStatus:
+        return self._apply("rtl")
+
+    def land(self) -> CommandStatus:
+        return self._apply("land")
+
+    def set_param(self, name: str, value: float) -> CommandStatus:
+        if name == "RTL_ALT":
+            with self._lock:
+                self.v.rtl_alt = value / 100.0
+            return CommandStatus.ok()
+        return CommandStatus.denied("unknown param")
+
     def close(self):
-        self._stop = True
+        self._stop.set()

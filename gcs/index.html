@@ -55,7 +55,14 @@ const telTopic  = new ROSLIB.Topic({ros, name:'/swarm/telemetry',       messageT
 const meshTopic = new ROSLIB.Topic({ros, name:'/swarm/mesh_topology',   messageType:'swarm_interfaces/msg/MeshTopology'});
 const reqTopic  = new ROSLIB.Topic({ros, name:'/swarm/task_requests',   messageType:'swarm_interfaces/msg/TaskRequest'});
 const asgTopic  = new ROSLIB.Topic({ros, name:'/swarm/task_assignments',messageType:'swarm_interfaces/msg/TaskAssignment'});
-const camTopic  = new ROSLIB.Topic({ros, name:'/swarm/camera/compressed',messageType:'sensor_msgs/msg/CompressedImage'});
+let camTopic = null;       // follows the drone selected in the command bar
+function watchCamera(label){
+  if (camTopic) camTopic.unsubscribe();
+  camTopic = new ROSLIB.Topic({ros, name:'/swarm/'+label+'/camera/compressed',
+                               messageType:'sensor_msgs/msg/CompressedImage', throttle_rate: 1000});
+  camTopic.subscribe(onCamera);
+}
+window.watchCamera = watchCamera;
 
 ros.on('connection', () => { setStatus('ROS link: UP'); reqTopic.advertise(); });
 ros.on('close',  () => setStatus('ROS link: DOWN'));
@@ -77,13 +84,20 @@ window.fitFleet = fitFleet;
 function focusDrone(l){ const d = drones[l]; if (d) map.setView([d.lat, d.lon], 16); }
 window.focusDrone = focusDrone;
 
+const byNum = (a,b) => parseInt(a.label.slice(1)) - parseInt(b.label.slice(1));
 function roster(){
   document.getElementById('roster').innerHTML =
-    Object.values(drones).sort((a,b)=>a.label<b.label?-1:1).map(d =>
+    Object.values(drones).sort(byNum).map(d =>
       '<div class="dr" onclick="focusDrone(\''+d.label+'\')">'+d.label+
       ' <span class="bar" style="width:'+Math.max(4,d.batt*0.6)+'px;background:'+
-      (d.batt>50?'#0c0':d.batt>20?'#fa0':'#f00')+'"></span> '+Math.round(d.batt)+'%</div>').join('');
+      (d.batt>50?'#0c0':d.batt>20?'#fa0':'#f00')+'"></span> '+Math.round(d.batt)+'%'+
+      ' <span style="color:#9ff">'+(d.phase||'')+(d.task?' '+d.task:'')+'</span>'+
+      (d.fsm && d.fsm!=='GUIDED' && d.fsm!=='GROUND' ? ' <span style="color:#fa0">['+d.fsm+']</span>':'')+
+      (d.latch ? ' <span style="color:#f55">LOCK: '+d.latch+'</span>':'')+'</div>').join('');
 }
+// each drone reports its own phase / task / neighbours: there is no central roster
+new ROSLIB.Topic({ros, name:'/swarm/neighbors', messageType:'swarm_interfaces/msg/NeighborReport'})
+  .subscribe(m => { const d = drones[m.label]; if (d){ d.phase = m.phase; d.task = m.current_task; } });
 
 function drawDrone(d){
   const color = d.batt > 50 ? '#0c0' : d.batt > 20 ? '#fa0' : '#f00';
@@ -116,9 +130,11 @@ meshTopic.subscribe(m => {
   for (const k in links) delete links[k];
   (m.edges ?? []).forEach(e => {
     const a = e.label_a ?? e.a, b = e.label_b ?? e.b;
+    const q = (e.link_quality ?? 1);          // measured packet-receipt ratio
     if (drones[a] && drones[b]){
       links[a+'-'+b] = L.polyline([[drones[a].lat, drones[a].lon],[drones[b].lat, drones[b].lon]],
-        {color:'#0af', weight:2, dashArray:'5 5'}).addTo(map);
+        {color: q > 0.8 ? '#0af' : q > 0.5 ? '#fa0' : '#f44', weight:2, opacity: 0.3 + 0.7*q,
+         dashArray:'5 5'}).addTo(map).bindTooltip(a+'↔'+b+' link '+Math.round(q*100)+'%');
     }
   });
   stats();
@@ -134,6 +150,7 @@ reqTopic.subscribe(m => {
 
 asgTopic.subscribe(m => {
   const winner = m.winner_label ?? m.assigned_to ?? m.winner;
+  if (!m.task_id){ hist(winner + ' dropped its task'); return; }
   log(m.task_id + ' → ' + winner);
   hist('ASG ' + m.task_id + ' → ' + winner);
   if (tasks[m.task_id])
@@ -142,7 +159,7 @@ asgTopic.subscribe(m => {
   if (t && d) L.polyline([[d.lat, d.lon], t.getLatLng()], {color:'#f0a', weight:3}).addTo(map);
 });
 
-camTopic.subscribe(m => {
+function onCamera(m){
   const u = (typeof m.data === 'string')
     ? Uint8Array.from(atob(m.data), c => c.charCodeAt(0))
     : new Uint8Array(m.data);
@@ -152,7 +169,7 @@ camTopic.subscribe(m => {
   img.src = url;
   document.getElementById('camlabel').textContent =
     'CAM: ' + (m.header.frame_id || '?') + ' · ' + new Date().toLocaleTimeString();
-});
+}
 
 map.on('click', e => {
   const lat = e.latlng.lat, lon = e.latlng.lng;
@@ -185,13 +202,17 @@ document.body.insertAdjacentHTML('beforeend',
   '<div id="cmdbar" style="position:absolute;bottom:10px;right:10px;z-index:1000;background:rgba(0,0,0,.82);color:#0f0;padding:8px 12px;border-radius:6px;font-family:monospace;font-size:13px">' +
   'CMD <select id="cmdsel" style="background:#032;color:#0f0"></select> <span id="altread"></span> ' +
   '<button onclick="cmd(\'ARM\')">ARM</button><button onclick="cmd(\'TAKEOFF\')">TAKEOFF</button>' +
-  '<button onclick="cmd(\'RTL\')">RTL</button><button onclick="cmd(\'LAND\')">LAND</button></div>');
+  '<button onclick="cmd(\'RTL\')">RTL</button><button onclick="cmd(\'LAND\')">LAND</button>' +
+  '<button onclick="cmd(\'RESUME\')" title="re-enable autonomy after RTL/LAND/E-STOP">RESUME</button>' +
+  '<button onclick="cmd(\'ESTOP\')" style="background:#600;color:#fff;border-color:#f00">E-STOP</button></div>');
 const cmdTopic = new ROSLIB.Topic({ros, name:'/swarm/commands', messageType:'swarm_interfaces/msg/DroneCommand'});
 ros.on('connection', () => cmdTopic.advertise());
 setInterval(() => {
   const s = document.getElementById('cmdsel'); const cur = s.value;
-  s.innerHTML = Object.keys(drones).sort().map(l => '<option>'+l+'</option>').join('');
+  s.innerHTML = Object.values(drones).sort(byNum).map(d => '<option>'+d.label+'</option>').join('') +
+                '<option value="ALL">ALL drones</option>';
   if (cur) s.value = cur;
+  if (s.value && s.value !== 'ALL' && s.value !== window._camFor){ window._camFor = s.value; watchCamera(s.value); }
   const d = drones[s.value];
   document.getElementById('altread').textContent = d ? 'alt ' + (d.alt ?? 0).toFixed(1) + 'm' : '';
 }, 1000);
@@ -199,7 +220,9 @@ new ROSLIB.Topic({ros, name:'/swarm/telemetry', messageType:'swarm_interfaces/ms
   .subscribe(m => { const d = drones[m.label ?? m.drone_label]; if (d) d.alt = m.alt ?? 0; });
 function cmd(c){
   const l = document.getElementById('cmdsel').value;
-  if (l){ cmdTopic.publish(new ROSLIB.Message({label:l, command:c})); log('CMD ' + c + ' → ' + l); }
+  if (!l) return;
+  if ((c === 'ESTOP' || l === 'ALL') && !confirm(c + ' → ' + l + ' ?')) return;
+  cmdTopic.publish(new ROSLIB.Message({label:l, command:c})); log('CMD ' + c + ' → ' + l);
 }
 window.cmd = cmd;
 </script>
@@ -712,7 +735,9 @@ if (window.THREE) (function () {
   var reqTopic = new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests',
     messageType: 'swarm_interfaces/msg/TaskRequest' });
   var sugg = {};
-  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests',
+  // drones publish perception-based suggestions here; the operator confirms by
+  // re-sending the same task id on /swarm/task_requests
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/task_suggestions',
     messageType: 'swarm_interfaces/msg/TaskRequest' }).subscribe(function (m) {
     var id = m.task_id;
     if (!id || id.indexOf('RESCUE-') !== 0 || sugg[id]) return;
@@ -727,7 +752,8 @@ if (window.THREE) (function () {
     if (sugg[m.task_id]) { sugg[m.task_id].remove(); delete sugg[m.task_id]; }
   });
   window.confirmSugg = function (id, lat, lon) {
-    reqTopic.publish(new ROSLIB.Message({ task_id: id, lat: lat, lon: lon }));
+    reqTopic.publish(new ROSLIB.Message({ task_id: id, lat: lat, lon: lon, description: 'operator confirm' }));
+    if (sugg[id]) sugg[id].closePopup();
   };
 })();
 </script>
@@ -778,7 +804,7 @@ if (window.THREE) (function () {
       b.style.display = 'block';
       if (m.event === 'PERIMETER_FORMED') {
         b.style.borderColor = '#0f0'; b.style.color = '#0f0';
-        b.textContent = '⬢ PERIMETER FORMED · ' + m.task_id + ' · ' + m.detail;
+        b.textContent = '⬢ PERIMETER FORMED · ' + m.task_id + ' · ' + m.detail + (m.reporter ? ' (seen by ' + m.reporter + ')' : '');
       } else if (m.event === 'PERIMETER_DEGRADED') {
         b.style.borderColor = '#fa0'; b.style.color = '#fa0';
         b.textContent = '⬢ PERIMETER DEGRADED · ' + m.task_id + ' · ' + m.detail;
@@ -856,5 +882,33 @@ if (window.THREE) (function () {
     });
   }
   wait();
+})();
+</script>
+<script>
+// ---- SEARCH area: two clicks define a rectangle; idle drones split it between them ----
+(function () {
+  if (!window.L || !window.ROSLIB || !window.map) return;
+  var btn = document.createElement('button');
+  btn.textContent = '⋆ SEARCH area';
+  btn.style.cssText = 'position:absolute;top:78px;left:50%;transform:translateX(-50%);z-index:1000;background:#023;color:#7ff;border:1px solid #0cc;border-radius:4px;font-family:monospace;padding:4px 12px;cursor:pointer';
+  document.body.appendChild(btn);
+  var armed = false, first = null, n = 0, rect = null;
+  var req = new ROSLIB.Topic({ ros: ros, name: '/swarm/task_requests', messageType: 'swarm_interfaces/msg/TaskRequest' });
+  function reset(){ armed = false; first = null; btn.textContent = '⋆ SEARCH area'; btn.style.background = '#023'; }
+  btn.onclick = function () {
+    if (armed) { reset(); return; }
+    armed = true; btn.textContent = '⋆ click FIRST corner'; btn.style.background = '#0cc';
+  };
+  map.on('click', function (e) {
+    if (!armed) return;
+    if (!first) { first = e.latlng; btn.textContent = '⋆ click OPPOSITE corner'; return; }
+    var a = first, b = e.latlng; n++;
+    if (rect) map.removeLayer(rect);
+    rect = L.rectangle([a, b], { color: '#0cc', weight: 1, dashArray: '4 4', fillOpacity: 0.05 }).addTo(map);
+    req.publish(new ROSLIB.Message({ task_id: 'SEARCH-' + n,
+      lat: (a.lat + b.lat) / 2, lon: (a.lng + b.lng) / 2,
+      description: 'area=' + [a.lat, a.lng, b.lat, b.lng].map(function (v) { return v.toFixed(6); }).join(',') }));
+    reset();
+  });
 })();
 </script>

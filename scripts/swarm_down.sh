@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-pkill -f "swarm_real.launch"; pkill -f "swarm_agents.launch"; pkill -f "swarm_perception.launch"
-pkill -f rosbridge_websocket; pkill -f "http.server 8080"; pkill -f arducopter; pkill -x zenohd
+pkill -f "swarm_bringup" ; pkill -f "vehicle_manager|drone_brain|mesh_observer|target_mover"
+pkill -f rosbridge_websocket; pkill -f "http.server 8080"; pkill -f "arducopter" ; pkill -x zenohd
 echo "swarm down"

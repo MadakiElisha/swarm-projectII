@@ -4,10 +4,10 @@ Used by the pytest suite (CI) and by `python -m swarm_common.sim`.
 """
 import math
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List
 
-from ..config import load_fleet, synthetic_fleet, Fleet, SwarmCfg
-from ..tasks import DONE, OPEN, MERGED
+from ..config import load_fleet, synthetic_fleet, SwarmCfg
+from ..tasks import DONE, MERGED
 from .core import NetCfg, Quarry, SwarmSim, Victim
 
 
@@ -185,8 +185,8 @@ def partition_heal(seed=7) -> ScenarioResult:
     sim = SwarmSim(load_fleet(), seed=seed)
     sim.partition(0, 60, {1, 2})
     for side in ({1}, {5}):
-        sim.at(5, lambda s, side=side: s.operator_task("T5", 1400, 1400, to=side,
-                                                        params={"hold_s": 300.0}))
+        sim.at(5, lambda s, side=side: s.operator_task(
+            "T5", 1400, 1400, to=side, params={"hold_s": 300.0}))
     sim.at(10, lambda s: s.operator_task("T6", 200, 1500, to={1}))     # side A only
     snap = {}
     sim.at(45, lambda s: snap.setdefault("during", {k: list(v) for k, v in s.holders().items()}))
@@ -215,8 +215,8 @@ def dense_crossing(seed=8, n=10) -> ScenarioResult:
     for d in fleet.drones:
         hx, hy = fleet.home_enu(d.id)
         tx, ty = 2 * cx - hx, 900.0 if d.id % 2 else -900.0
-        sim.at(1, lambda s, i=d.id, tx=tx, ty=ty: s.operator_task(f"X{i}", tx, ty, to={i},
-                                                                   params={"hold_s": 5.0}))
+        sim.at(1, lambda s, i=d.id, tx=tx, ty=ty: s.operator_task(
+            f"X{i}", tx, ty, to={i}, params={"hold_s": 5.0}))
     # make each drone prefer its own task: others see it only via gossip; CBBA
     # may swap tasks, which is fine - what we test is separation.
     sim.run(300)

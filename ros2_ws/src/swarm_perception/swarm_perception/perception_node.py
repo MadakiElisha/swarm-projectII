@@ -1,7 +1,8 @@
-"""Swarm eyes: YOLOv8 over a namespaced camera topic -> typed DetectionArray.
+"""Swarm eyes: YOLOv8 over this drone's camera -> DetectionArray for this drone's brain.
 
-One instance per drone. Video stays in the drone's namespace; only the tiny
-DetectionArray crosses the shared bus (the bandwidth rule for real hardware).
+One instance per drone. Video AND raw detections stay in the drone's own
+namespace (/swarm/<label>/...). The brain projects detections onto the
+ground and only compact, fused observations cross the radio by gossip.
 """
 import cv2
 import numpy as np
@@ -26,7 +27,7 @@ class PerceptionNode(Node):
         model_path = self.get_parameter('model_path').value
         self.model = YOLO(model_path)
         self.topic = f'/swarm/{self.label}/camera/compressed'
-        self.pub = self.create_publisher(DetectionArray, '/swarm/detections', 10)
+        self.pub = self.create_publisher(DetectionArray, f'/swarm/{self.label}/detections', 10)
         self.create_subscription(CompressedImage, self.topic, self.on_image, 10)
         self.get_logger().info(
             f'Perception[{self.label}] ready (model={model_path}, listening {self.topic})')
