@@ -35,10 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
+          set -x
           apt-get update
-          apt-get install -y python3-pip python3-yaml
-          pip3 install --break-system-packages pymavlink matplotlib
+          apt-get install -y --no-install-recommends python3-pip python3-yaml python3-matplotlib python3-lxml
+          pip3 install --break-system-packages --ignore-installed --no-deps pymavlink
+          pip3 install --break-system-packages --ignore-installed fastcrc || true
+          python3 -c "import pymavlink.mavutil, yaml; print('deps ok')"
       - name: colcon build
         shell: bash
         run: |
