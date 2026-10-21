@@ -25,3 +25,5 @@ logs/
 reports/
 __pycache__/
 *.pyc
+__pycache__/
+.pytest_cache/

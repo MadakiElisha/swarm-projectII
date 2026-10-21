@@ -1,6 +1,78 @@
-# Simulated fleet: one telemetry_publisher per drone.
-fleet:
-  ros__parameters:
-    drone_labels: ["D1", "D2", "D3", "D4", "D5"]
-    start_lats:   [6.5244, 6.5300, 6.5360, 6.5420, 6.5480]
-    start_lons:   [3.3792, 3.3850, 3.3910, 3.3970, 3.4030]
+# Single source of truth for the fleet and swarm-wide parameters.
+#
+# Every component (pure simulator, ROS launch files, SITL scripts, tests)
+# loads THIS file via swarm_common.config.load_fleet(). Add a drone by
+# adding an entry under `drones:`; nothing else needs editing.
+#
+# Coordinates: all swarm math runs in a local East/North/Up frame in metres,
+# centred on `origin`. Lat/lon only appears at the edges (MAVLink, GCS).
+
+swarm:
+  origin: {lat: 6.5244, lon: 3.3792}
+
+  # --- communications ---
+  radio_range_m: 3500.0        # used only by link EMULATION in simulation
+  beacon_hz: 5.0               # tiny position/velocity beacons (collision avoidance)
+  state_hz: 1.0                # full gossip state (roster, tasks, CBBA, observations)
+  neighbor_timeout_s: 3.0      # neighbour considered lost after this
+  isolation_rtb_s: 90.0        # no neighbours AND no task for this long -> return home
+
+  # --- energy model (shared by bidding AND battery self-checks -> no thrash) ---
+  energy:
+    pct_per_m: 0.005           # cruise cost  (~5 %/km)
+    pct_per_s_hover: 0.025     # hover/loiter cost (~1.5 %/min)
+    pct_per_mps_wind_per_km: 0.3
+    reserve_pct: 20.0          # must remain on landing at home
+    critical_pct: 12.0         # vehicle-level hard failsafe (RTL, latched)
+
+  # --- task allocation (CBBA) ---
+  cbba:
+    max_bundle: 1              # tasks a drone may hold at once (1 = one physical job)
+    discount_per_s: 0.995      # time-discounted reward lambda^t
+    rebid_margin: 0.10         # must beat a held bid by 10% to steal it (anti-chatter)
+    hitl_required: true        # perception-sourced RESCUE tasks need operator confirm
+
+  # --- motion ---
+  motion:
+    cruise_speed_mps: 10.0
+    max_accel_mps2: 3.0
+    base_alt_m: 30.0
+    layer_spacing_m: 6.0       # each drone flies its own altitude layer
+    layers: 5
+    safety_radius_m: 6.0       # ORCA agent radius (separation >= 2x this)
+    orca_horizon_s: 6.0
+    arrive_radius_m: 15.0
+
+  # --- formation / pursuit ---
+  formation:
+    max_slots: 5
+    ring_radius_m: 300.0
+    ring_period_s: 480.0
+    on_station_band_m: 60.0
+    hold_s: 180.0
+    lead_time_s: 6.0
+
+  # --- perception / world model ---
+  perception:
+    hfov_deg: 78.0
+    vfov_deg: 49.0
+    gimbal_pitch_deg: -90.0    # straight down
+    fuse_radius_m: 25.0
+    target_track_window_s: 8.0
+
+  # --- coverage search ---
+  coverage:
+    cell_m: 40.0
+    search_alt_m: 70.0         # search higher for a wider footprint (+ own layer offset)
+
+  # --- safety ---
+  geofence: {radius_m: 8000.0, max_alt_m: 120.0}
+  brain_stale_s: 1.5           # vehicle holds position if brain setpoints stop
+  brain_dead_s: 10.0           # ... and returns home if they never come back
+
+drones:
+  - {id: 1, home_lat: 6.5244, home_lon: 3.3792, mavlink_url: "tcp:127.0.0.1:5770"}
+  - {id: 2, home_lat: 6.5300, home_lon: 3.3850, mavlink_url: "tcp:127.0.0.1:5780"}
+  - {id: 3, home_lat: 6.5360, home_lon: 3.3910, mavlink_url: "tcp:127.0.0.1:5790"}
+  - {id: 4, home_lat: 6.5420, home_lon: 3.3970, mavlink_url: "tcp:127.0.0.1:5800"}
+  - {id: 5, home_lat: 6.5480, home_lon: 3.4030, mavlink_url: "tcp:127.0.0.1:5810"}
