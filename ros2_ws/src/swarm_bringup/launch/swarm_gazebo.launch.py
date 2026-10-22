@@ -60,7 +60,8 @@ def _setup(context):
                           parameters=[{'fleet_file': lc('fleet_file'), 'flood': bool(info.get('flood_m')),
                                        'only_labels': sim_cams}]))
     nodes.append(Node(package='swarm_mesh', executable='mesh_observer', name='mesh_observer'))
-    nodes.append(Node(package='swarm_tasks', executable='target_mover', name='target_mover'))
+    nodes.append(Node(package='swarm_tasks', executable='target_mover', name='target_mover',
+                      parameters=[{'autostart': '' if lc('target') == 'off' else 'auto'}]))
     if info.get('target'):
         nodes.append(Node(package='swarm_tasks', executable='gz_quarry', name='gz_quarry'))
     return nodes
@@ -73,5 +74,6 @@ def generate_launch_description():
         DeclareLaunchArgument('perception', default_value='true'),
         DeclareLaunchArgument('model', default_value=os.path.expanduser('~/swarm_models/visdrone_yolo11s.pt')),
         DeclareLaunchArgument('water_model', default_value=''),
+        DeclareLaunchArgument('target', default_value='auto'),     # car already driving (off: no car)
         OpaqueFunction(function=_setup),
     ])

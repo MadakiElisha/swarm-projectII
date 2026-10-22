@@ -41,6 +41,7 @@ class PerceptionNode(Node):
         # whose class names contain "water"/"flood" (e.g. trained on FloodNet)
         self.declare_parameter('water_model', '')
         self.declare_parameter('water_hz', 1.0)
+        self.declare_parameter('annotated_hz', 2.0)     # camera image with the boxes drawn (0 = off)
         self.label = self.get_parameter('drone_label').value
         self.min_conf = self.get_parameter('min_confidence').value
         self.classes = set(self.get_parameter('classes').value)
@@ -67,8 +68,9 @@ class PerceptionNode(Node):
             self.water_seg = YOLO(self.water_mode)
         labels = [x for x in self.get_parameter('drone_labels').value if x] or [self.label]
         self._last_water = {lab: 0.0 for lab in labels}
-        self.pubs = {}
+        self.pubs, self.ann_pubs, self._last_ann = {}, {}, {}
         for lab in labels:
+            self.ann_pubs[lab] = self.create_publisher(CompressedImage, f'/swarm/{lab}/camera/annotated', 2)
             self.pubs[lab] = self.create_publisher(DetectionArray, f'/swarm/{lab}/detections', 10)
             self.create_subscription(CompressedImage, f'/swarm/{lab}/camera/compressed',
                                      lambda m, lab=lab: self.on_image(m, lab), 2)
@@ -118,10 +120,30 @@ class PerceptionNode(Node):
         out.count = len(out.detections)
 
         self.pubs[label].publish(out)
+        self._annotate(frame, out, label)
         if out.count:
             self.get_logger().info(f'[{label}] {out.count} detection(s): '
                                    f'{sorted({d.class_name for d in out.detections})}',
                                    throttle_duration_sec=2.0)
+
+    def _annotate(self, frame, out, label):
+        hz = float(self.get_parameter('annotated_hz').value)
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if hz <= 0 or now - self._last_ann.get(label, 0.0) < 1.0 / hz:
+            return
+        self._last_ann[label] = now
+        from swarm_common.annotate import draw_detections, to_jpeg
+        img = frame.copy()
+        if img.shape[1] > 960:
+            img = cv2.resize(img, (960, int(img.shape[0] * 960 / img.shape[1])))
+        dets = [{'class': d.class_name, 'conf': d.confidence, 'u0': d.bbox_x, 'v0': d.bbox_y,
+                 'w': d.bbox_w, 'h': d.bbox_h} for d in out.detections]
+        draw_detections(img, dets, f'{label}  YOLO')
+        m = CompressedImage()
+        m.header = out.header
+        m.format = 'jpeg'
+        m.data = to_jpeg(img)
+        self.ann_pubs[label].publish(m)
 
     def _water(self, frame, label):
         """Water cells in this frame as "water" detections (flood recon), at water_hz."""

@@ -31,6 +31,7 @@ ArduPilot parameters to set per drone (beyond a normal tune):
 | `BATT_*`, `BATT_FS_LOW_ACT=2` (RTL), `BATT_FS_CRT_ACT=1` (LAND) | ArduPilot's own failsafes stay on underneath the swarm FSM |
 | `FS_GCS_ENABLE` | 0 for the MAVLink link to the companion (the swarm FSM owns that watchdog); keep RC/C2 failsafe on |
 | `GUID_OPTIONS` | 0 (default) |
+| `WPNAV_SPEED`, `WPNAV_SPEED_UP` | 1500, 500 (cm/s): intercepts fly at 14 m/s and climb at up to 5 m/s; check your airframe can |
 
 On the companion:
 

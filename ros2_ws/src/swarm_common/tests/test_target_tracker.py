@@ -38,7 +38,7 @@ def test_velocity_is_estimated_without_detector_velocity():
 
 
 def test_parked_target_is_taken_when_nothing_moves():
-    tk, _ = _feed(quarry_v=(0.0, 0.0), t_end=100)
+    tk, _ = _feed(quarry_v=(0.0, 0.0), t_end=200)
     assert tk.locked is not None
     assert math.hypot(tk.locked.x - 1000, tk.locked.y - 900) < 20
 

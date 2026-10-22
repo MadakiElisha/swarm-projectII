@@ -42,6 +42,7 @@ class MotionCfg:
     safety_radius_m: float = 6.0
     orca_horizon_s: float = 6.0
     arrive_radius_m: float = 15.0
+    intercept_speed_mps: float = 14.0   # scramble / chase speed (autopilot WPNAV_SPEED must allow it)
 
 
 @dataclass

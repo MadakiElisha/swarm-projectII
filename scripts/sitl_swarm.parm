@@ -4,3 +4,8 @@
 # The drones' in-flight drain calibration copes either way.
 SIM_BATT_CAP_AH 12
 BATT_CAPACITY   12000
+# Intercepts: the swarm commands up to 14 m/s (motion.intercept_speed_mps). ArduCopter caps
+# GUIDED velocity at WPNAV_SPEED and take-off climb at WPNAV_SPEED_UP: raise both
+# (same values belong on the real drones' flight controllers).
+WPNAV_SPEED     1500
+WPNAV_SPEED_UP  500

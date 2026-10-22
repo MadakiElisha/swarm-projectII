@@ -317,8 +317,10 @@ class TargetTracker:
     """
     def __init__(self, x: float, y: float, t: float, classes=("target", "vehicle"),
                  gate_m: float = 25.0, alpha: float = 0.5, beta: float = 0.2,
-                 acquire_speed: float = 6.0):
+                 acquire_speed: float = 10.0, coast_s: float = 12.0):
         self.cx, self.cy, self.ct = x, y, t
+        self.hint_v = (0.0, 0.0)                 # last known velocity (after a loss): where to look
+        self.coast_s = coast_s
         self.classes = set(classes)
         self.gate_m, self.alpha, self.beta = gate_m, alpha, beta
         self.acquire_speed = acquire_speed       # how far the target may have driven since the click
@@ -350,6 +352,33 @@ class TargetTracker:
     def _moving(self, trk: _AB) -> bool:
         return trk.hits >= 4 and trk.t - trk.t0 >= 4.0 and trk.speed >= 1.0 and trk.displacement >= 10.0
 
+    def _static(self, c: _AB) -> bool:
+        return c.hits >= 4 and c.t - c.t0 >= 6.0 and c.displacement < 6.0
+
+    def look_candidates(self, now: float) -> List[Tuple[float, float]]:
+        """Vehicles seen recently in the area the target can have reached that are not yet
+        known to be parked: worth a closer look (a drone flies over to confirm)."""
+        out = []
+        for c in sorted(self.cands, key=lambda c: (-c.t, c.t0)):
+            if now - c.t <= 10.0 and not self._static(c) and self._start_ok(c):
+                out.append(c.predict(now))
+        return out
+
+    def search_area(self, now: float) -> Tuple[float, float, float, Tuple[float, float]]:
+        """(x, y, radius, hint velocity): where the target can be, while we have no lock.
+        With a known heading (operator input, or the track we just lost) the area is a
+        blob moving along it; without, a circle growing around the last fix."""
+        dt = max(0.0, now - self.ct)
+        hx, hy = self.hint_v
+        if hx or hy:
+            # dead-reckon along the heading for up to 90 s (it may turn, stop or hit a dead end);
+            # the area keeps growing, and after 40 s the drones fan out all around it
+            dh = min(dt, 90.0)
+            r = 40.0 + 0.4 * math.hypot(hx, hy) * dt
+            hint = self.hint_v if dt <= 40.0 else (0.0, 0.0)
+            return self.cx + hx * dh, self.cy + hy * dh, min(1200.0, r), hint
+        return self.cx, self.cy, min(1200.0, 40.0 + self.acquire_speed * dt * 0.8), self.hint_v
+
     def update(self, observations, now: float) -> Optional[Track]:
         new = [o for o in observations
                if o.cls in self.classes and o.oid not in self._seen and o.t >= self.ct - 1.0]
@@ -372,7 +401,7 @@ class TargetTracker:
             movers = [c for c in self.cands if self._moving(c) and self._start_ok(c)]
             if movers:
                 self.locked = min(movers, key=lambda c: (math.hypot(c.x0 - self.cx, c.y0 - self.cy), c.t0))
-            elif now - self.ct > 90.0:
+            elif now - self.ct > 180.0 and not any(self._moving(c) for c in self.cands):
                 still = [c for c in self.cands if c.hits >= 3
                          and math.hypot(c.x - self.cx, c.y - self.cy) <= 60.0]
                 if still:
@@ -382,10 +411,12 @@ class TargetTracker:
         else:
             self.cands = [c for c in self.cands if now - c.t <= 30.0]
         trk = self.locked
-        if trk is None or now - trk.t > 20.0:            # never acquired, or lost for too long
+        if trk is None or now - trk.t > self.coast_s:    # never acquired, or lost for too long
             if trk is not None:                          # lost: re-acquire around the last estimate
                 self.cx, self.cy = trk.predict(now)
+                self.hint_v = (trk.vx, trk.vy)
                 self.ct, self.locked = now, None
+                self.cands.append(trk)                   # it may well be seen again
             return None
         x, y = trk.predict(now)
         return Track("tracked", "vehicle", x, y, trk.vx, trk.vy, now, trk.hits)

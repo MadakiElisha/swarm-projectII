@@ -410,7 +410,56 @@ def patrol_intruder(seed=22, loss=0.1) -> ScenarioResult:
     return r
 
 
+def intercept_chase(seed=31, loss=0.1) -> ScenarioResult:
+    """The exhibition case: a car is ALREADY driving; the operator clicks where they see it.
+    Drones scramble from their pads, hunt for it (cameras only see their own footprint),
+    lock on to the moving one (parked cars nearby), then follow it: the ring moves with it."""
+    sim = SwarmSim(load_fleet(REF), seed=seed, net=NetCfg(loss=loss))
+    sim.realistic_detector = True
+    sim.camera_only = True
+    sim.quarry = Quarry(700, 600, 6.0, 2.5, start=0.0, stop=900.0)
+    t_click = 60.0
+    q0 = sim.quarry.at(t_click)
+    sim.decoys = [(q0[0] + 40 + 70 * k, q0[1] + 30 + 20 * (k % 2)) for k in range(5)]
+    # the operator clicks on the car and drags along its direction of travel (GCS: second click)
+    hd = math.degrees(math.atan2(sim.quarry.vx, sim.quarry.vy))
+    sim.at(t_click, lambda s: s.operator_task("INTERCEPT-9", q0[0], q0[1], to={1, 2},
+                                              params={"heading_deg": hd}))
+    st = {"near": None, "lock": None}
+    errs = []
+
+    def watch(s):
+        q = s.quarry.at(s.t)
+        if q is None:
+            return
+        if st["near"] is None and any(v.alive and v.alt > 5 and math.hypot(v.x - q[0], v.y - q[1]) < 60
+                                      for v in s.veh.values()):
+            st["near"] = s.t
+        tk = s.brains[1]._trackers.get("INTERCEPT-9")
+        if st["lock"] is None and tk is not None and tk.locked is not None:
+            st["lock"] = s.t
+        if s.t >= 400 and abs(s.t % 5) < 1e-6:
+            tr = s.brains[1]._tracks.get("INTERCEPT-9")
+            if tr is not None and tk is not None and tk.locked is not None:
+                errs.append(math.hypot(tr.x - q[0], tr.y - q[1]))
+            else:
+                errs.append(999.0)
+    sim.run(720, watch)
+    r = ScenarioResult("intercept_chase", sim)
+    mean_err = sum(errs) / len(errs) if errs else 1e9
+    r.notes.append(f"first drone within 60 m of the car {st['near'] and st['near'] - t_click:.0f} s after the "
+                   f"click; locked {st['lock'] and st['lock'] - t_click:.0f} s after; follow error {mean_err:.0f} m")
+    r.checks["a drone reaches the car within 120 s of the click"] = st["near"] is not None and \
+        st["near"] - t_click <= 120
+    r.checks["locked on to the moving car"] = st["lock"] is not None
+    r.checks["keeps following it (mean error < 40 m over 5 min)"] = mean_err < 40.0
+    r.checks["ring formed around the moving car"] = "PERIMETER_FORMED" in sim.event_names("INTERCEPT-9")
+    r.checks["no loss of separation"] = sim.los_samples == 0
+    return r
+
+
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
+    "intercept_chase": intercept_chase,
     "flood_recon": flood_recon,
     "patrol_intruder": patrol_intruder,
     "intercept_with_decoys": intercept_with_decoys,

@@ -205,7 +205,10 @@ def derive_work_items(reg: TaskRegistry, now: float, formation_cfg,
                     # nearest patrollers peel off to chase an intruder and come back after
                     hold, reward = float(t.params.get("shift_s", PATROL_SHIFT_S)), 90.0
                 else:
-                    hold, reward = max(0.0, float(t.params.get("expires_at", now)) - now), 120.0
+                    # energy horizon: one shift, not the whole (possibly 25 min) task - a drone low
+                    # on battery hands its slot over and another one takes it (battery_handover)
+                    hold = min(PATROL_SHIFT_S / 2, max(0.0, float(t.params.get("expires_at", now)) - now))
+                    reward = 120.0
                 items[f"{t.id}/s{s}"] = WorkItem(f"{t.id}/s{s}", t.id, t.kind, sx, sy, hold,
                                                  reward=reward, group=t.id, slot=s, n_slots=n)
     return items

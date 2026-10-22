@@ -50,5 +50,11 @@ if [ "$UP" -lt "$N" ]; then
     exit 1
 fi
 pgrep -f "worlds/swarm.sdf" > /dev/null || { echo "[gz] PROBLEM: Gazebo is not running: $LOG/gazebo.log"; exit 1; }
+if [ "${HEADLESS:-0}" != "1" ]; then      # point the Gazebo window at the drones on their pads
+    for _ in $(seq 1 20); do
+        gz service -l 2>/dev/null | grep -q "/gui/move_to/pose" && break; sleep 1
+    done
+    "$ROOT/scripts/gz/view.sh" site || echo "[gz] (could not move the Gazebo camera: scripts/gz/view.sh site)"
+fi
 echo "[gz] OK: Gazebo + $UP/$N autopilots running. GPS lock takes ~30-60 s. Logs: $LOG"
 echo "[gz] next: ros2 launch swarm_bringup swarm_gazebo.launch.py"

@@ -9,7 +9,7 @@ or lat,lon with --ll. The swarm decides who does what; this only asks.
     scripts/mission.py perimeter --at 150,-100 [--radius 120]  # ring, holds, releases
     scripts/mission.py patrol  --at 0,0 --radius 200          # standing patrol ring
     scripts/mission.py intruder --at 400,0 [--to 0,0]         # SIM: a car drives into the patrol area
-    scripts/mission.py intercept [--at x,y]                   # SIM car starts there; swarm pursues it
+    scripts/mission.py intercept [--at x,y] [--heading deg]   # pursue the car (default: where it is now)
     scripts/mission.py goto    --at 200,50                    # one drone goes there
     scripts/mission.py confirm RESCUE-3-1                     # confirm a perception suggestion
     scripts/mission.py cancel  PATROL-1234
@@ -19,6 +19,7 @@ Without --at, intercept/intruder use the moving car from the Gazebo world (world
 """
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -27,7 +28,7 @@ import rclpy
 from rclpy.node import Node
 
 from swarm_common.config import load_fleet
-from swarm_interfaces.msg import DroneCommand, TaskRequest
+from swarm_interfaces.msg import DroneCommand, TargetTrack, TaskRequest
 
 
 def _xy(s):
@@ -45,6 +46,7 @@ def main():
     ap.add_argument("--ll", action="store_true")
     ap.add_argument("--size", default="600x400", help="search/flood area WxH metres")
     ap.add_argument("--radius", type=float, default=None)
+    ap.add_argument("--heading", type=float, default=None, help="intercept: direction of travel, deg from north")
     ap.add_argument("--to", default="0,0", help="intruder: x,y it drives towards (along streets)")
     ap.add_argument("--fleet", default=None)
     a = ap.parse_args()
@@ -65,6 +67,20 @@ def main():
 
     rclpy.init()
     node = Node("swarm_operator_cli")
+
+    def live_car():
+        """The moving car's position and heading (deg from north) from /swarm/target_track."""
+        got = []
+        sub = node.create_subscription(TargetTrack, "/swarm/target_track", lambda m: got.append(m), 10)
+        t_end = time.time() + 10.0
+        while not got and time.time() < t_end:
+            rclpy.spin_once(node, timeout_sec=0.2)
+        node.destroy_subscription(sub)
+        if not got:
+            return None
+        m = got[-1]
+        x, y = o.to_enu(m.lat, m.lon)
+        return x, y, math.degrees(math.atan2(m.vel_e, m.vel_n)) % 360
     req = node.create_publisher(TaskRequest, "/swarm/task_requests", 10)
     sim = node.create_publisher(TaskRequest, "/swarm/sim/start_target", 10)
     cmd = node.create_publisher(DroneCommand, "/swarm/commands", 10)
@@ -84,6 +100,12 @@ def main():
         m.lat, m.lon = o.lat, o.lon
         msgs.append((req, m, m.task_id))
     else:
+        heading = a.heading
+        if a.what == "intercept" and at is None:
+            seen = live_car()                    # where the operator sees the car right now
+            if seen:
+                at, heading = seen[:2], seen[2]
+                print(f"the car is at {at[0]:.0f},{at[1]:.0f} heading {heading:.0f} deg")
         if a.what in ("intercept", "intruder") and at is None:
             at = car_start()
         if at is None:
@@ -106,7 +128,7 @@ def main():
             m.description = f"radius={a.radius or 200:.0f}"
         elif a.what == "intercept":
             m.task_id = f"INTERCEPT-{n}"
-            m.description = "operator: pursue this vehicle"
+            m.description = "operator: pursue this vehicle" + (f" heading={heading:.0f}" if heading is not None else "")
         elif a.what == "intruder":
             m.task_id = f"SIM-INTRUDER-{n}"
             m.description = f"toward={a.to}"

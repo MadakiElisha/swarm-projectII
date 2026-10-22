@@ -258,8 +258,14 @@ def synthetic_city(blocks: int = 6, block_m: float = 120.0, street_m: float = 30
                 h = rnd.uniform(60, 110) if tall else rnd.uniform(8, 24)
                 b.append({"id": f"b{k}", "h": round(h, 1), "base": 0.0, "kind": "office" if tall else "yes",
                           "poly": [[qx, qy], [qx + s, qy], [qx + s, qy + s], [qx, qy + s]]})
+    # street grid along the gaps between blocks; every crossing is a shared vertex (like OSM nodes)
+    lines = [bi * (block_m + street_m) - off - street_m / 2 for bi in range(blocks + 1)]
+    roads = []
+    for c in lines:
+        roads.append({"w": 10, "line": [[c, v] for v in lines]})       # north-south street
+        roads.append({"w": 10, "line": [[v, c] for v in lines]})       # east-west street
     area = {"v": 1, "name": "synthetic", "origin": [6.4525, 3.3935], "bbox": [0, 0, 0, 0],
-            "buildings": b, "water": [], "roads": []}
+            "buildings": b, "water": [], "roads": roads}
     area["max_h"] = max(x["h"] for x in b)
     area["launch"] = list(find_launch_site(area))
     return area

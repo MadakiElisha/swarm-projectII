@@ -27,7 +27,7 @@ from swarm_interfaces.msg import Setpoint as SetpointMsg
 from swarm_interfaces.msg import VehicleState
 
 ALT_GAIN = 0.8          # vertical speed per metre of altitude error
-MAX_VZ = 2.5
+MAX_VZ = 4.0             # m/s (autopilot allows WPNAV_SPEED_UP = 5 m/s)
 
 
 class VehicleManager(Node):

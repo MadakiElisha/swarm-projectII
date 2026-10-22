@@ -32,7 +32,8 @@ def _setup(context):
                         link_emulation=lc('link_emulation').lower() == 'true',
                         loss=float(lc('loss')), sim_target=not cam, seed=int(lc('seed')))
     nodes.append(Node(package='swarm_mesh', executable='mesh_observer', name='mesh_observer'))
-    nodes.append(Node(package='swarm_tasks', executable='target_mover', name='target_mover'))
+    nodes.append(Node(package='swarm_tasks', executable='target_mover', name='target_mover',
+                      parameters=[{'autostart': '' if lc('target') == 'off' else 'auto'}]))
     if cam:
         nodes.append(Node(package='swarm_tasks', executable='sim_world', name='sim_world', output='screen',
                           parameters=[{'fleet_file': lc('fleet_file'), 'flood': lc('flood').lower() == 'true'}]))
@@ -47,5 +48,6 @@ def generate_launch_description():
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('sim_camera', default_value='true'),
         DeclareLaunchArgument('flood', default_value='false'),
+        DeclareLaunchArgument('target', default_value='auto'),     # car already driving (off: no car)
         OpaqueFunction(function=_setup),
     ])

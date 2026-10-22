@@ -105,6 +105,10 @@ ap = os.path.expanduser(os.environ.get("ARDUPILOT_HOME", "~/ardupilot"))
 apgz = os.path.expanduser(os.environ.get("ARDUPILOT_GAZEBO", "~/ardupilot_gazebo"))
 (ok if glob.glob(f"{apgz}/build/libArduPilotPlugin.so") else (fail if GAZEBO else warn))(
     f"ardupilot_gazebo plugin in {apgz}", "STEPS=apgz scripts/setup_ubuntu2404.sh")
+if GAZEBO:
+    for pkg, fix in (("ros_gz_bridge", "sudo apt install ros-jazzy-ros-gz"),
+                     ("rosapi", "sudo apt install ros-jazzy-rosbridge-suite")):
+        (ok if run(f"ros2 pkg prefix {pkg}") else fail)(f"ROS package {pkg}", fix)
 (ok if run("ros2 pkg prefix rosbridge_server") else warn)(
     "rosbridge (web GCS live mode)", "sudo apt install ros-jazzy-rosbridge-server")
 

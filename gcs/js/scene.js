@@ -15,7 +15,7 @@ SW.Scene = function (container, store, opts) {
   this.modelScale = 1.6 * this.heroScale;
   this.modelUri = opts.modelUri || 'assets/drone.glb';
   this.layers = { links: true, packets: true, consensus: true, avoidance: true, coverage: true,
-                  sensors: true, trails: true, target: true, truth: true, labels: true };
+                  sensors: true, sightings: false, trails: true, target: true, truth: true, labels: true };
   var token = SW.settings.get('ionToken') || window.SW_ION_TOKEN || '';
   if (token) Cesium.Ion.defaultAccessToken = token;
   var imagery = new Cesium.UrlTemplateImageryProvider({
@@ -307,7 +307,9 @@ SW.Scene.prototype._pick = function () {
       return;
     }
     if (self.onGroundClick) {
-      var c = self.viewer.camera.pickEllipsoid(ev.position);
+      // the real surface under the cursor (terrain / 3D tiles / boxes); the ellipsoid only as fallback
+      var c = self.viewer.scene.pickPositionSupported ? self.viewer.scene.pickPosition(ev.position) : undefined;
+      if (!c || !Cesium.defined(c)) c = self.viewer.camera.pickEllipsoid(ev.position);
       if (c) {
         var g = Cesium.Cartographic.fromCartesian(c);
         self.onGroundClick(Cesium.Math.toDegrees(g.latitude), Cesium.Math.toDegrees(g.longitude), ev.position);

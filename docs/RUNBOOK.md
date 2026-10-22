@@ -67,9 +67,11 @@ Afterwards: `python3 scripts/mission.py resume ALL`
 python3 scripts/mission.py search --at 0,0 --size 700x500
 ```
 ✅ phase `SEARCH`; GCS: the area fills in (coverage); `seen` shows `person:` / `vehicle:`;
-`RESCUE-…` **suggested** tasks appear (one per person found). Confirm one:
+the Tasks panel shows **one card "N people found – AWAITING YOU"**. Rescue suggestions only come
+from a search (or flood recon) inside its area – patrols and chases never raise them.
+Confirm one: click **✓ RESCUE-…** on that card, or
 ```bash
-python3 scripts/mission.py confirm RESCUE-3-1      # use an id from the status board / GCS
+python3 scripts/mission.py confirm RESCUE-3-1      # an id from the card
 ```
 ✅ one drone flies to that person and holds over them.
 
@@ -81,10 +83,20 @@ python3 scripts/mission.py perimeter --at 100,50 --radius 120
 drone takes the slot → `FORMED` again.
 
 **Test 4 – pursue a moving car**
-```bash
-python3 scripts/mission.py intercept --at 200,0
-```
-✅ a yellow car drives along the streets in the GCS; drones detect it as `vehicle`, ring it and follow it.
+
+A car is **already driving** around the streets when the session starts (yellow, labelled
+*moving car* in the GCS). Give the order the way an operator would, on the car where you see it now:
+
+* GCS: **◆ Intercept** → click the car → click a point ahead of it in its direction of travel
+  (or the same spot again if you don't know where it's heading); or
+* terminal: `python3 scripts/mission.py intercept` (uses where the car is right now and its heading)
+
+✅ the drones **scramble** (claim in ~1 s, climb at 5 m/s, fly at 14 m/s), phase `HUNTING`: one flies
+straight to where the car should be, the others fan out over the streets around it. As soon as a
+camera sees it moving (`seen: vehicle`), they lock on: one drone **shadows it overhead**, the others
+ring it and move with it (`PERIMETER_FORMED`). Typically ~30–70 s from the click. Parked cars are
+looked at and ignored. The chase continues until you cancel it:
+`python3 scripts/mission.py cancel INTERCEPT-…` (or after 15 min).
 
 **Test 5 – perimeter surveillance**
 ```bash
@@ -111,7 +123,11 @@ Between tests: `python3 scripts/mission.py rtl ALL` (they fly home and land on t
   Click = select, double-click = chase camera behind it.
 * **Right – swarm mind:** every task, who holds each slot (green = all drones agree), event feed.
 * **Bottom – layers:** Links, Packets (radio), Consensus, Avoidance, Coverage, Sensors (camera
-  footprints), Trails, Target, World (people, cars, water).
+  footprints), Trails, Target, Sightings (every raw detection, off by default), World (people, cars, water).
+* **▣ Cameras (top right):** what each drone's camera sees, with the **detection boxes**. Click a
+  view to enlarge it; **⧉** opens it in its own window (e.g. on a second screen). In light mode these
+  are the simulated cameras (drawn from the map, labelled SIMULATED); in Gazebo mode D1/D2 show the
+  real rendered images through YOLO.
 * **Bottom – tools:** click a tool, then the map (Search / Flood: two corners). RTL / LAND /
   RESUME / E-STOP act on the selected drone, or all if none is selected.
 * **⚙ Settings:** buildings *Photorealistic* (default with a Cesium token: Google 3D tiles of the
@@ -134,10 +150,26 @@ Same tabs, same tests. Gazebo does the physics; D1 and D2 have rendered cameras 
 VisDrone YOLO (one shared process); the others use simulated cameras. If the PC struggles:
 fewer drones, or `--camera-drones 1` when building the world.
 
+**For an exhibition (two screens):** Gazebo window on one, the GCS on the other.
+With `--gui` the Gazebo window opens looking at the launch site and the drones. Then:
+
+```bash
+scripts/gz/view.sh follow D1      # Gazebo camera chases drone D1 (any drone, or "quarry" = the car)
+scripts/gz/view.sh site           # back to the launch site
+scripts/gz/view.sh free           # stop following (mouse control)
+```
+
+Detection boxes: GCS **▣ Cameras** (⧉ for a separate window), or
+`ros2 run rqt_image_view rqt_image_view /swarm/D1/camera/annotated`.
+
+Gazebo and the light mode are separate sessions: stop one (`scripts/swarm_down.sh`) before
+starting the other.
+
 ## 6. If something looks wrong
 
 | you see | do |
 |---|---|
+| a Gazebo error you don't understand | copy the last 30 lines of the **swarm** tab and `logs/gz/gazebo.log` |
 | status board: `none` for every drone | the swarm tab isn't running, or the tabs aren't on the same ROS setup – restart with `up.sh` |
 | `link DOWN` | that autopilot stopped: autopilots tab / `logs/sitl/D<n>.log` |
 | FSM stuck in `TAKEOFF`, `Arm: ...` messages in the swarm tab | autopilot warming up (GPS/EKF); it retries for 3 min |

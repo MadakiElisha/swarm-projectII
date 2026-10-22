@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drone camera</title>
+<script src="https://cdn.jsdelivr.net/npm/roslib@1.4.1/build/roslib.min.js"></script>
+<style>
+  :root { --bg: #020617; --text: #e2e8f0; --dim: #64748b; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px system-ui, sans-serif; }
+  #wrap { position: absolute; inset: 0; display: grid; place-items: center; }
+  img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  #msg { position: absolute; top: 10px; left: 12px; color: var(--dim); }
+</style>
+</head>
+<body>
+<div id="wrap"><img id="img" alt=""></div>
+<div id="msg">connecting…</div>
+<script>
+  // One drone's camera with the detection boxes: camera.html?d=D1[&ws=ws://host:9090]
+  'use strict';
+  var q = new URLSearchParams(location.search), label = q.get('d') || 'D1';
+  var ws = q.get('ws') || ('ws://' + (location.hostname || 'localhost') + ':9090');
+  document.title = label + ' camera';
+  var msg = document.getElementById('msg'), img = document.getElementById('img'), last = 0;
+  var ros = new ROSLIB.Ros({ url: ws });
+  ros.on('connection', function () { msg.textContent = label + ' · waiting for images (drone must be flying)'; });
+  ros.on('error', function () { msg.textContent = 'cannot reach rosbridge at ' + ws; });
+  new ROSLIB.Topic({ ros: ros, name: '/swarm/' + label + '/camera/annotated',
+                     messageType: 'sensor_msgs/msg/CompressedImage', throttle_rate: 200 })
+    .subscribe(function (m) { img.src = 'data:image/jpeg;base64,' + m.data; last = Date.now(); msg.textContent = label; });
+  setInterval(function () { if (last && Date.now() - last > 5000) msg.textContent = label + ' · no images for 5 s'; }, 1000);
+</script>
+</body>
+</html>

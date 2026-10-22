@@ -24,7 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "ros2_ws", "src", "swarm_common"))
 
-from swarm_common.area import PRESETS, from_overpass, save_area  # noqa: E402
+from swarm_common.area import PRESETS, from_overpass, save_area, synthetic_city  # noqa: E402
 from swarm_common.geo import Origin  # noqa: E402
 
 PAD_M = 15.0          # > 2 x safety radius: simultaneous take-offs keep separation
@@ -83,7 +83,20 @@ def main():
     ap.add_argument("--drones", type=int, default=5)
     ap.add_argument("--launch", help="lat,lon of the launch pad (default: open ground nearest the centre)")
     ap.add_argument("--osm-json", help="use a saved Overpass response instead of downloading")
+    ap.add_argument("--synthetic", action="store_true",
+                    help="no download: a generated grid city (streets, blocks, a few towers) for offline tests")
     a = ap.parse_args()
+    if a.synthetic:
+        name = a.name or "grid-city"
+        out_dir = os.path.join(ROOT, "areas", name)
+        os.makedirs(out_dir, exist_ok=True)
+        area = synthetic_city(blocks=8, block_m=110.0, street_m=30.0, seed=3)
+        area["name"] = name
+        save_area(area, os.path.join(out_dir, "area.json"))
+        with open(os.path.join(out_dir, "fleet.yaml"), "w") as f:
+            f.write(fleet_yaml(area, a.drones, name, None))
+        print(f"synthetic area '{name}': {len(area['buildings'])} buildings, {len(area['roads'])} streets -> {out_dir}")
+        return
     if a.list:
         for k, v in PRESETS.items():
             print(f"{k:16s} {v[4]}")

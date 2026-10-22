@@ -132,6 +132,12 @@ SW.LiveSource.prototype.attach = function (store, onStatus) {
     var p = SW.geo.toEnu(m.lat, m.lon);
     store.quarry = { t: self.now(), x: p[0], y: p[1], vx: m.vel_e, vy: m.vel_n };
   }, 500);
+  (this._fleet.drones || []).forEach(function (d) {          // camera views with detection boxes
+    topic('/swarm/' + d.label + '/camera/annotated', 'sensor_msgs/msg/CompressedImage', function (m) {
+      store.cams = store.cams || {};
+      store.cams[d.id] = { t: Date.now() / 1000, src: 'data:image/jpeg;base64,' + m.data };
+    }, 400);
+  });
   topic('/swarm/sim/scene', 'std_msgs/msg/String', function (m) {      // simulation only: the world
     try { store.world = JSON.parse(m.data); store.worldV = (store.worldV || 0) + 1; } catch (e) { /* ignore */ }
   }, 2000);

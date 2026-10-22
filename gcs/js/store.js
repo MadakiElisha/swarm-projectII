@@ -118,8 +118,15 @@ SW.Store.prototype.setTasks = function (t, list) {
   list.forEach(function (tk) {
     seen[tk.id] = 1;
     var old = self.tasks[tk.id];
-    if (!old) self.feed(t, '＋', tk.id + ' ' + (tk.st === 'SUGGESTED' ? 'suggested by perception' : 'created'),
-                        tk.st === 'SUGGESTED' ? 'warn' : 'info');
+    if (!old && tk.st === 'SUGGESTED') {
+      // perception suggestions: one feed line per burst, not one per person
+      self._sugN = (self._sugN || 0) + 1;
+      if (!self._sugT || t - self._sugT > 15) {
+        self._sugT = t;
+        self.feed(t, '＋', 'people found by the search - confirm in Tasks to send a drone', 'warn');
+      }
+    } else if (!old) self.feed(t, '＋', tk.id + ' created', 'info');
+    else if (old.st !== tk.st && tk.st === 'MERGED') { /* duplicate sighting folded: not news */ }
     else if (old.st !== tk.st) {
       var icon = { OPEN: '✔', DONE: '✓', MERGED: '⇢', CANCELLED: '✕' }[tk.st] || '•';
       var txt = tk.st === 'OPEN' && old.st === 'SUGGESTED' ? 'confirmed by operator' :

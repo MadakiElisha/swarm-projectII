@@ -126,7 +126,11 @@ SW.Overlays.prototype._taskEntity = function (tk) {
       }, false), font: '600 12px Inter, system-ui, sans-serif', fillColor: C(color),
                outlineColor: C('#020617'), outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                pixelOffset: new Cesium.Cartesian2(0, -18), disableDepthTestDistance: Number.POSITIVE_INFINITY,
-               distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 12000) },
+               distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 12000),
+               // unconfirmed suggestions stay quiet on the map (dot only); merged duplicates vanish
+               show: new Cesium.CallbackProperty(function () {
+                 var st = self.taskEnts[tk.id].tk.st; return st !== 'SUGGESTED' && st !== 'MERGED'; }, false) },
+      show: new Cesium.CallbackProperty(function () { return self.taskEnts[tk.id].tk.st !== 'MERGED'; }, false),
     }));
   }
   if (tk.k === 'FORMATION' || tk.k === 'INTERCEPT') {
@@ -316,7 +320,7 @@ SW.Overlays.prototype.updateSensors = function (t) {
   });
   // recent sightings from every drone
   this.obsPts.removeAll();
-  if (!this.scene.layers.sensors) return;
+  if (!this.scene.layers.sightings) return;
   for (var i = s.obs.length - 1; i >= 0; i--) {
     var o = s.obs[i], age = t - o[0];
     if (age < 0) continue;
@@ -388,7 +392,10 @@ SW.Overlays.prototype.setWorld = function (w) {
       orientation: Cesium.Transforms.headingPitchRollQuaternion(self.scene.pos(SW.geo.toLatLon(c[0], c[1])[0],
         SW.geo.toLatLon(c[0], c[1])[1], 0), new Cesium.HeadingPitchRoll(yaw, 0, 0)),
       box: { dimensions: new Cesium.Cartesian3(4.4, 1.8, 1.5), show: show,
-             material: C(['#d1d5db', '#1f2937', '#b91c1c', '#1d4ed8', '#f8fafc'][i % 5]) } }));
+             material: C(['#d1d5db', '#1f2937', '#b91c1c', '#1d4ed8', '#f8fafc'][i % 5]) },
+      point: { pixelSize: 6, color: C('#cbd5e1', 0.9), outlineColor: C('#020617'), outlineWidth: 1.5, show: show,
+               disableDepthTestDistance: Number.POSITIVE_INFINITY,
+               distanceDisplayCondition: new Cesium.DistanceDisplayCondition(220, 1e7) } }));
   });
 };
 
@@ -419,10 +426,10 @@ SW.Overlays.prototype._target = function () {
   };
   this.v.entities.add({
     position: new Cesium.CallbackProperty(function () { return truth() || undefined; }, false),
-    point: { pixelSize: 12, color: C(BAD), outlineColor: C('#fff', 0.8), outlineWidth: 2,
+    point: { pixelSize: 11, color: C('#facc15'), outlineColor: C('#020617', 0.9), outlineWidth: 3,
              disableDepthTestDistance: Number.POSITIVE_INFINITY,
              show: new Cesium.CallbackProperty(function () { return self.scene.layers.target && !!truth(); }, false) },
-    label: { text: 'target', font: '600 11px Inter, system-ui, sans-serif', fillColor: C(BAD),
+    label: { text: 'moving car', font: '700 12px Inter, system-ui, sans-serif', fillColor: C('#facc15'),
              outlineColor: C('#020617'), outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE,
              pixelOffset: new Cesium.Cartesian2(14, 0), horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
              disableDepthTestDistance: Number.POSITIVE_INFINITY,

@@ -203,6 +203,7 @@ class SwarmSim:
             self._truth_grid = height_grid(fleet.area, cell=5.0, dilate=False)
         self.recorder = None          # optional swarm_common.sim.recorder.Recorder
         self.realistic_detector = False   # True: quarry seen as plain "vehicle", no velocity
+        self.camera_only = False          # True: vehicles only seen inside the camera footprint
         self.decoys: List[Tuple[float, float]] = []
         self.flood_zones: List[Tuple[float, float, float, float]] = []   # x0, y0, x1, y1 under water
 
@@ -330,7 +331,8 @@ class SwarmSim:
                                             vic.y + self.rnd.gauss(0, 3), 0.8, self.t)
         if self.quarry is not None:
             q = self.quarry.at(self.t)
-            if q and math.hypot(q[0] - v.x, q[1] - v.y) <= max(r, 400.0):
+            vr = 1.3 * r if self.camera_only else max(r, 400.0)
+            if q and math.hypot(q[0] - v.x, q[1] - v.y) <= vr:
                 # realistic mode: a detector only says "vehicle" and gives no velocity
                 cls, vx, vy = ("vehicle", 0.0, 0.0) if self.realistic_detector else \
                               (TARGET, self.quarry.vx, self.quarry.vy)
@@ -347,7 +349,8 @@ class SwarmSim:
                     if any(x0 <= px <= x1 and y0 <= py <= y1 for (x0, y0, x1, y1) in self.flood_zones):
                         self.brains[i].on_water(px, py, step / 2)
         for (dx, dy) in self.decoys:            # parked cars: also "vehicle"
-            if math.hypot(dx - v.x, dy - v.y) <= max(r, 400.0) and self.rnd.random() < 0.7:
+            if math.hypot(dx - v.x, dy - v.y) <= (1.3 * r if self.camera_only else max(r, 400.0)) \
+                    and self.rnd.random() < 0.7:
                 self.brains[i].on_detection("vehicle", dx + self.rnd.gauss(0, 2),
                                             dy + self.rnd.gauss(0, 2), 0.8, self.t)
 

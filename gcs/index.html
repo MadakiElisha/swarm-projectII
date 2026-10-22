@@ -53,6 +53,22 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
 #caption { padding: 8px 14px; max-width: 640px; text-align: center; color: #f1f5f9; display: none; font-size: 13px; }
 #topright { pointer-events: auto; display: flex; gap: 6px; padding: 6px; }
 
+/* ---- camera panel */
+#cams { position: absolute; right: 354px; bottom: 120px; width: min(560px, calc(100vw - 720px)); max-height: calc(100vh - 220px);
+        z-index: 6; display: none; padding: 10px; overflow: auto; }
+#cams .hd { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+#cams .hd span { color: var(--dim); font-size: 11px; }
+#camgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+#camgrid .cam { position: relative; border-radius: 8px; overflow: hidden; background: #000; border: 1px solid var(--line);
+                aspect-ratio: 16 / 10; cursor: pointer; }
+#camgrid .cam.big { grid-column: 1 / -1; }
+#camgrid .cam img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#camgrid .cam .tag { position: absolute; left: 6px; bottom: 6px; font: 600 11px var(--mono); padding: 2px 6px;
+                     border-radius: 6px; background: rgba(2,6,23,.75); }
+#camgrid .cam .pop { position: absolute; right: 6px; top: 26px; padding: 2px 6px; font-size: 12px; }
+#camgrid .none { color: var(--dim); padding: 6px; grid-column: 1 / -1; }
+@media (max-width: 1100px) { #cams { right: 12px; width: calc(100vw - 24px); } }
+
 /* ---- side panels */
 .side { position: absolute; top: 76px; bottom: 120px; width: 300px; display: flex; flex-direction: column;
         z-index: 4; overflow: hidden; }
@@ -163,6 +179,7 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
   <div id="topright" class="glass">
     <button id="btnOverview" title="Fit the whole mission">⌖ Overview</button>
     <button id="btnOrbit" class="wide" title="Slow cinematic orbit">⟳ Orbit</button>
+    <button id="btnCams" title="What each drone's camera sees, with the detection boxes">▣ Cameras</button>
     <button id="btnSettings" title="Settings">⚙</button>
   </div>
 </div>
@@ -201,6 +218,7 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
     <button data-layer="sensors" class="on">Sensors</button>
     <button data-layer="trails" class="on">Trails</button>
     <button data-layer="target" class="on">Target</button>
+    <button data-layer="sightings" title="every raw detection from every camera (last 90 s)">Sightings</button>
     <button data-layer="truth" class="on" title="people, cars, flood water and the moving car (simulation ground truth)">World</button>
     </span>
     <div id="ops"><div class="sep"></div>
@@ -242,6 +260,8 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
   <div style="display:flex;gap:6px;margin-top:10px"><button id="saveSettings" class="on">Save &amp; reload</button>
     <button id="closeSettings">Close</button></div>
 </div>
+<div id="cams" class="glass"><div class="hd"><b>Cameras</b><span id="camsHint">click a view to enlarge · ⧉ pops out</span></div>
+  <div id="camgrid"></div></div>
 <div id="popup" class="glass"></div>
 <div id="toast" class="glass"></div>
 

@@ -57,6 +57,19 @@ SW.UI.prototype._wire = function () {
     self._orbit = !self._orbit; this.classList.toggle('on', self._orbit);
     if (self._orbit) self.scene.unfollow();
   };
+  $('btnCams').onclick = function () {
+    var p = $('cams'), on = p.style.display !== 'block';
+    p.style.display = on ? 'block' : 'none'; this.classList.toggle('on', on);
+  };
+  $('camgrid').addEventListener('click', function (e) {
+    var pop = e.target.closest('[data-pop]'), cam = e.target.closest('[data-cam]');
+    if (pop) {                                   // its own window (second screen)
+      window.open('camera.html?d=' + pop.getAttribute('data-pop') + '&ws=' + encodeURIComponent(src.url || ''),
+                  'cam' + pop.getAttribute('data-pop'), 'width=980,height=640');
+      return;
+    }
+    if (cam) { self._bigCam = parseInt(cam.getAttribute('data-cam'), 10); self.scene.select(self._bigCam); }
+  });
   $('btnSettings').onclick = function () {
     $('ionToken').value = SW.settings.get('ionToken') || '';
     $('rosUrl').value = SW.settings.get('rosUrl') || '';
@@ -78,10 +91,11 @@ SW.UI.prototype._wire = function () {
   document.querySelectorAll('[data-op]').forEach(function (b) {
     b.onclick = function () {
       var op = b.getAttribute('data-op');
-      self.op = self.op === op ? null : op; self._searchA = null;
+      self.op = self.op === op ? null : op; self._searchA = null; self._icpt = null;
       document.querySelectorAll('[data-op]').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-op') === self.op); });
       if (self.op) self.toast((op === 'SEARCH' || op === 'FLOOD') ? 'Click the first corner of the area' :
-                              op === 'PATROL' ? 'Click the centre of the perimeter to guard' : 'Click the map to place ' + op);
+                              op === 'PATROL' ? 'Click the centre of the perimeter to guard' :
+                              op === 'INTERCEPT' ? 'Click the vehicle to pursue' : 'Click the map to place ' + op);
     };
   });
   document.querySelectorAll('[data-cmd]').forEach(function (b) {
@@ -93,9 +107,34 @@ SW.UI.prototype._wire = function () {
       self.toast(cmd + ' → ' + label);
     };
   });
+  $('tasks').addEventListener('click', function (e) {          // confirm a perception suggestion
+    var b = e.target.closest ? e.target.closest('[data-confirm]') : null;
+    if (!b || src.kind !== 'live') return;
+    var id = b.getAttribute('data-confirm'), tk = self.s.tasks[id];
+    if (!tk) return;
+    var ll = SW.geo.toLatLon(tk.x, tk.y);
+    src.sendTask(id, ll[0], ll[1], 'operator confirmed');
+    self.toast(id + ' confirmed - the nearest free drone goes');
+  });
   this.scene.onGroundClick = function (lat, lon) {
     if (!self.op || src.kind !== 'live') return;
     var n = Date.now() % 100000;
+    if (self.op === 'INTERCEPT') {       // click the car, then click where it is heading
+      if (!self._icpt) {
+        self._icpt = [lat, lon];
+        self.toast('Now click where it is driving to (or the same spot if you don\'t know)');
+        return;
+      }
+      var p0 = SW.geo.toEnu(self._icpt[0], self._icpt[1]), p1 = SW.geo.toEnu(lat, lon);
+      var d = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+      var hd = (Math.atan2(p1[0] - p0[0], p1[1] - p0[1]) * 180 / Math.PI + 360) % 360;
+      src.sendTask('INTERCEPT-' + n, self._icpt[0], self._icpt[1], 'operator' + (d > 15 ? ' heading=' + hd.toFixed(0) : ''));
+      self._icpt = null;
+      self.toast('INTERCEPT sent' + (d > 15 ? ' (heading ' + hd.toFixed(0) + '°)' : '') + ' - the swarm scrambles');
+      self.op = null;
+      document.querySelectorAll('[data-op]').forEach(function (x) { x.classList.remove('on'); });
+      return;
+    }
     if (self.op === 'SEARCH' || self.op === 'FLOOD') {
       if (!self._searchA) { self._searchA = [lat, lon]; self.toast('Now click the opposite corner'); return; }
       var a = self._searchA;
@@ -113,6 +152,30 @@ SW.UI.prototype._wire = function () {
     self.op = null;
     document.querySelectorAll('[data-op]').forEach(function (x) { x.classList.remove('on'); });
   };
+};
+
+SW.UI.prototype.renderCams = function () {
+  if ($('cams').style.display !== 'block') return;
+  var s = this.s, now = Date.now() / 1000, big = this._bigCam || this.scene.selected, grid = $('camgrid');
+  var ids = Object.keys(s.cams || {}).map(Number).filter(function (i) { return now - s.cams[i].t < 10; }).sort();
+  if (!ids.length) {
+    grid.innerHTML = '<div class="none">No camera views yet. They appear when drones are flying (live mode): ' +
+      'Gazebo cameras through YOLO, otherwise the simulated cameras.</div>';
+    this._camKey = '';
+    return;
+  }
+  if (big && ids.indexOf(big) < 0) big = null;
+  var key = ids.join(',') + '|' + big;
+  if (key !== this._camKey) {                    // rebuild the layout only when it changes
+    this._camKey = key;
+    grid.innerHTML = ids.map(function (i) {
+      var d = s.drones[i] || { label: 'D' + i };
+      return '<div class="cam' + (i === big ? ' big' : '') + '" data-cam="' + i + '"><img id="camimg' + i + '">' +
+        '<span class="tag" style="color:' + SW.colorOf(i) + '">' + d.label + '</span>' +
+        '<button class="pop" data-pop="' + d.label + '" title="open in its own window">⧉</button></div>';
+    }).join('');
+  }
+  ids.forEach(function (i) { var im = $('camimg' + i); if (im && im.src !== s.cams[i].src) im.src = s.cams[i].src; });
 };
 
 SW.UI.prototype.toast = function (msg) {
@@ -219,6 +282,18 @@ SW.UI.prototype.renderTasks = function () {
     return ra - rb || (s.tasks[b].ct || 0) - (s.tasks[a].ct || 0);
   });
   var open = 0, agreedAll = 0, total = 0;
+  // perception suggestions are grouped into ONE card instead of one card per person
+  var sugg = ids.filter(function (id) { return s.tasks[id].k === 'RESCUE' && s.tasks[id].st === 'SUGGESTED'; });
+  ids = ids.filter(function (id) { var tk = s.tasks[id]; return !(tk.k === 'RESCUE' && (tk.st === 'SUGGESTED' || tk.st === 'MERGED')); });
+  if (sugg.length) {
+    html += '<div class="tk"><div class="hd"><span class="id">' + sugg.length + ' ' + (sugg.length === 1 ? 'person' : 'people') +
+      ' found</span><span class="chip">RESCUE</span><span class="chip st RTB">AWAITING YOU</span></div>' +
+      '<div style="color:var(--dim);font-size:11px;margin-top:3px">confirm to send a drone' +
+      (this.src.kind === 'live' ? '' : ' (live mode)') + '</div><div class="slots">' +
+      sugg.slice(0, 6).map(function (id) {
+        return '<button class="slot" data-confirm="' + esc(id) + '" title="send a drone to ' + esc(id) + '">✓ ' + esc(id) + '</button>';
+      }).join('') + (sugg.length > 6 ? '<span class="slot">+' + (sugg.length - 6) + '</span>' : '') + '</div></div>';
+  }
   ids.slice(0, 14).forEach(function (id) {
     var tk = s.tasks[id], its = byParent[id] || [];
     if (tk.st === 'OPEN') open++;
@@ -266,6 +341,8 @@ SW.UI.prototype.renderFeed = function () {
 
 /* cinematic orbit around the action */
 SW.UI.prototype.frame = function (wallDt) {
+  this._camDt = (this._camDt || 0) + wallDt;
+  if (this._camDt > 0.4) { this._camDt = 0; this.renderCams(); }
   if (!this._orbit) return;
   var v = this.scene.viewer, cam = v.camera, cv = v.scene.canvas;
   var c = cam.pickEllipsoid(new Cesium.Cartesian2(cv.clientWidth / 2, cv.clientHeight / 2));

@@ -114,6 +114,12 @@ class DroneBrainNode(Node):
             except (ValueError, IndexError):
                 self.get_logger().warn(f'{self.label}: bad search area in {desc!r}')
                 return
+        for key, name in (('heading=', 'heading_deg'), ('speed=', 'speed')):   # INTERCEPT: where it's going
+            if key in desc:
+                try:
+                    params[name] = float(desc.split(key, 1)[1].split()[0].split(',')[0])
+                except (ValueError, IndexError):
+                    pass
         if 'radius=' in desc:                   # PATROL / SWARM: radius=<metres>
             try:
                 params['radius'] = float(desc.split('radius=', 1)[1].split()[0].split(',')[0])

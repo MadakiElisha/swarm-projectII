@@ -16,6 +16,7 @@ import os
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
 from swarm_common.config import load_fleet
@@ -34,6 +35,7 @@ class SimWorld(Node):
         self.declare_parameter('flood', False)
         self.declare_parameter('radius', 650.0)
         self.declare_parameter('camera_hz', 2.0)
+        self.declare_parameter('view_hz', 1.0)          # annotated camera views for the GCS (0 = off)
         self.declare_parameter('only_labels', [''])     # Gazebo: drones without a rendered camera
         fleet = load_fleet(self.get_parameter('fleet_file').value or None)
         self.origin = fleet.swarm.origin
@@ -80,6 +82,17 @@ class SimWorld(Node):
                     for i, lab in enumerate(self.labels)}
         self.vs = {}
         self.mover = None
+        self.views, self.view_pubs, self._last_dets = None, {}, {}
+        if float(self.get_parameter('view_hz').value) > 0:
+            try:
+                from swarm_common.annotate import SimViewRenderer
+                import cv2  # noqa: F401
+                self.views = SimViewRenderer(fleet.swarm.perception, fleet.area, self.scene)
+                self.view_pubs = {lab: self.create_publisher(CompressedImage, f'/swarm/{lab}/camera/annotated', 2)
+                                  for lab in self.labels}
+                self.create_timer(1.0 / float(self.get_parameter('view_hz').value), self.publish_views)
+            except ImportError:
+                self.get_logger().warn('OpenCV not available: no simulated camera views')
         self.pubs = {lab: self.create_publisher(DetectionArray, f'/swarm/{lab}/detections', 10)
                      for lab in self.labels}
         for lab in self.labels:
@@ -114,13 +127,30 @@ class SimWorld(Node):
             out = DetectionArray()
             out.header.stamp = now.to_msg()
             out.header.frame_id = lab
-            for d in self.cam[lab].detect(m.x, m.y, m.alt, m.roll, m.pitch, m.yaw_enu, movers):
+            dets = self.cam[lab].detect(m.x, m.y, m.alt, m.roll, m.pitch, m.yaw_enu, movers)
+            self._last_dets[lab] = (dets, movers)
+            for d in dets:
                 det = Detection()
                 det.class_name, det.confidence = d['class'], float(d['conf'])
                 det.bbox_x, det.bbox_y, det.bbox_w, det.bbox_h = d['u0'], d['v0'], d['w'], d['h']
                 out.detections.append(det)
             out.count = len(out.detections)
             self.pubs[lab].publish(out)
+
+    def publish_views(self):
+        from swarm_common.annotate import to_jpeg
+        for lab, m in self.vs.items():
+            if not m.connected or m.alt < 2.0 or lab not in self.view_pubs:
+                continue
+            dets, movers = self._last_dets.get(lab, ([], []))
+            img = self.views.render((m.x, m.y, m.alt, m.roll, m.pitch, m.yaw_enu), dets,
+                                    f'{lab}  alt {m.alt:.0f} m', movers)
+            msg = CompressedImage()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = lab
+            msg.format = 'jpeg'
+            msg.data = to_jpeg(img)
+            self.view_pubs[lab].publish(msg)
 
 
 def main(args=None):

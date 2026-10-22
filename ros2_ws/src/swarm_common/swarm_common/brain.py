@@ -10,6 +10,7 @@ Inputs                                    Outputs (BrainOutput, per tick)
   on_operator_task(...)  operator uplink    assignments  -> for the GCS
   on_detection(...)      own camera         events/suggestions/logs
 """
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -22,6 +23,7 @@ from .gossip import NeighborTable, Roster, RosterEntry
 from .motion import altitude_layer, arrived, avoid, limit_accel, preferred_velocity
 from .perception import MotionWatch, Observation, TargetTracker, Track, WorldModel, footprint_radius
 from .planner import Planner
+from .roads import RoadGraph
 from .tasks import (DONE, FORMATION, GOTO, INTERCEPT, OPEN, PATROL, RESCUE, RING_KINDS, SEARCH,
                     SUGGESTED, CANCELLED, MERGED, Task, TaskRegistry, WorkItem, derive_work_items,
                     ring_period, ring_slot_xy)
@@ -36,6 +38,7 @@ GROUND_TAKEOFF_PENALTY_S = 20.0
 MAX_OBS_PER_PACKET = 60
 TERMINAL_TASK_KEEP_S = 300.0
 CLAIM_SETTLE_S = 2.5          # hold a fresh claim this long before acting on it
+SCRAMBLE_SETTLE_S = 1.0       # ... except intercepts: a moving target can't wait
 PERSON, TARGET = "person", "target"
 TRACK_CLASSES = {"target", "vehicle"}      # what an intercept may follow (sim sensor, detector)
 INTRUDER_CLASSES = ("person", "vehicle", "target")
@@ -129,6 +132,7 @@ class DroneBrain:
         self._released_events = set()
         self._suggested_seen = set()
         self._vel = (0.0, 0.0)
+        self._wide_view = False
         self._last_tick = None
         self.phase = "IDLE"
         self.logs: List[str] = []
@@ -214,9 +218,10 @@ class DroneBrain:
             params.setdefault("n_slots", max(1, min(self.cfg.formation.max_slots, len(avail))))
             params.setdefault("radius", self.cfg.formation.intercept_radius_m if kind == INTERCEPT
                               else self.cfg.formation.ring_radius_m)
-            params.setdefault("hold_s", self.cfg.formation.hold_s)
+            # a chase lasts until the operator calls it off (CANCEL-<id>) or 15 min of following
+            params.setdefault("hold_s", 900.0 if kind == INTERCEPT else self.cfg.formation.hold_s)
             # hard upper bound in case the ring can never fully form
-            params.setdefault("expires_at", now + 600.0 + self.cfg.formation.hold_s)
+            params.setdefault("expires_at", now + 600.0 + float(params["hold_s"]))
         params.setdefault("desc", desc)
         self.registry.upsert(Task(task_id, kind, x, y, now, self.id, OPEN, now, params))
         if kind == SEARCH:
@@ -299,18 +304,23 @@ class DroneBrain:
             self._won_since.setdefault(j, now)
 
         # ---------------- execution
+        self._wide_view = False
         target, tvel, sp_kind = self._execute(now, s, out)
 
         # ---------------- motion
         if sp_kind == SP_VEL and target is not None:
             alt = self.alt
-            if self.phase == "SEARCH":
+            if self.phase in ("SEARCH", "HUNTING") or self._wide_view:   # higher = wider camera footprint
                 alt = self.cfg.coverage.search_alt_m + (self.alt - self.cfg.motion.base_alt_m)
+            cur = self.items.get(self._cur_item)
+            mcfg = self.cfg.motion
+            if cur is not None and cur.kind == INTERCEPT:   # scramble / chase at full speed
+                mcfg = dataclasses.replace(mcfg, cruise_speed_mps=mcfg.intercept_speed_mps)
             wp = self._route_to(pos, target, alt, now)
             if wp is not target:                  # a corner of a planned detour
-                pref = preferred_velocity(pos, wp, self.cfg.motion, (0.0, 0.0), slow_radius_m=12.0)
+                pref = preferred_velocity(pos, wp, mcfg, (0.0, 0.0), slow_radius_m=12.0)
             else:
-                pref = preferred_velocity(pos, target, self.cfg.motion, tvel)
+                pref = preferred_velocity(pos, target, mcfg, tvel)
             nbrs = [((k[1], k[2]), (k[4], k[5]), k[3]) for i, k in self.kin.items()
                     if now - k[0] <= BEACON_FRESH_S]
             v = avoid(pos, (s.vx, s.vy), pref, s.alt, nbrs, self.cfg.motion, dt) if airborne else pref
@@ -365,8 +375,8 @@ class DroneBrain:
 
         item_id = self.cbba.path[0] if self.cbba.path else ""
         item = self.items.get(item_id)
-        settled = (item_id == self._cur_item or
-                   now - self._won_since.get(item_id, now) >= CLAIM_SETTLE_S)
+        settle = SCRAMBLE_SETTLE_S if item is not None and item.kind == INTERCEPT else CLAIM_SETTLE_S
+        settled = (item_id == self._cur_item or now - self._won_since.get(item_id, now) >= settle)
         if item is not None and self.cbba.winner(item_id) == self.id and not settled:
             self.phase = "CLAIMING"
             return None, (0.0, 0.0), (SP_HOLD if airborne else SP_IDLE)
@@ -416,11 +426,18 @@ class DroneBrain:
             band = self.cfg.formation.on_station_band_m
             k = max(0.0, min(1.0, (5 * band - d_slot) / (4 * band)))
             tvel = (k * (-w * (ty - cy) + vx), k * (w * (tx - cx) + vy))
+            tk = self._trackers.get(it.parent) if it.kind == INTERCEPT else None
+            if tk is not None and tk.locked is None:
+                return self._hunt(it, tk, now, pos)
             if it.kind == INTERCEPT and it.slot == 0 and it.n_slots > 1:
-                # the shadow flies over the target (slightly ahead) so its camera keeps it in view;
-                # the rest of the ring is fed by its sightings through the shared track
+                # the shadow flies over the target (slightly ahead), high enough for a wide view,
+                # so its camera keeps it in sight; the ring is fed by its sightings (shared track)
                 tx, ty = cx + vx * 1.5, cy + vy * 1.5
                 tvel = (vx, vy)
+                self._wide_view = True
+                on = math.hypot(tx - pos[0], ty - pos[1]) <= self.cfg.formation.on_station_band_m
+                self.phase = "ON_STATION" if on else "ENROUTE"
+                return (tx, ty), tvel, SP_VEL
             elif it.kind == INTERCEPT and it.slot == 1 and (vx or vy):
                 lt = self.cfg.formation.lead_time_s           # the cutter leads the quarry
                 tx, ty = tx + vx * lt, ty + vy * lt
@@ -441,12 +458,52 @@ class DroneBrain:
             self.phase = "ENROUTE"
         return target, tvel, SP_VEL
 
+    def _hunt(self, it: WorkItem, tk: TargetTracker, now: float, pos):
+        """No lock on the target yet (or lost it): go and find it. Vehicles just seen in the
+        reachable area get a closer look first (one drone each, by slot); the other drones
+        fan out over the streets the target can have reached since the last fix."""
+        looks = tk.look_candidates(now)
+        k, n = it.slot, max(1, it.n_slots)
+        cx, cy, r, hv = tk.search_area(now)
+        if k < len(looks):
+            tx, ty = looks[k]
+        elif k == len(looks):
+            tx, ty = cx, cy                                # straight to where it should be now
+        else:
+            m = max(1, n - len(looks) - 1)
+            j = k - len(looks) - 1
+            base = math.atan2(hv[1], hv[0]) if (hv[0] or hv[1]) else 0.0
+            # with a known heading, bias the fan forward: -60 .. +60 deg around it
+            th = base + (math.radians(-60 + 120 * j / max(1, m - 1)) if (hv[0] or hv[1]) and m > 1
+                         else 2 * math.pi * j / m)
+            tx, ty = cx + r * math.cos(th), cy + r * math.sin(th)
+            g = self._road_graph()
+            if g is not None:
+                q = g.nodes[g.nearest((tx, ty))]
+                if math.hypot(q[0] - tx, q[1] - ty) < 0.5 * r + 60:
+                    tx, ty = q
+        self.phase = "HUNTING"
+        return (tx, ty), (0.0, 0.0), SP_VEL
+
+    def _road_graph(self):
+        if not hasattr(self, "_roads"):
+            roads = (self.fleet.area or {}).get("roads") or []
+            self._roads = RoadGraph(roads) if roads else None
+            if self._roads is not None and not self._roads.nodes:
+                self._roads = None
+        return self._roads
+
     def _centre(self, parent: Task, now: float):
         if parent.kind == INTERCEPT:
             tk = self._trackers.get(parent.id)
             if tk is None:             # the operator clicked on the target: that is the first fix
                 tk = self._trackers[parent.id] = TargetTracker(parent.x, parent.y, parent.created_t,
                                                                TRACK_CLASSES)
+                hd = parent.params.get("heading_deg")      # operator: "it's heading that way"
+                if hd is not None:
+                    sp = float(parent.params.get("speed", 7.0))
+                    tk.hint_v = (sp * math.cos(math.radians(90.0 - float(hd))),
+                                 sp * math.sin(math.radians(90.0 - float(hd))))
             tr = tk.update(self.world.obs.values(), now)
             if tr is not None:
                 self._tracks[parent.id] = tr
@@ -505,8 +562,16 @@ class DroneBrain:
                 fr = self.flood_report(tid)
                 out.events.append((tid, "FLOOD_MAP", f"{fr['flooded_m2'] / 1e4:.1f} ha flooded "
                                    f"({fr['flooded_pct']:.0f}% of surveyed), {fr['stranded']} people stranded"))
-        # perception -> RESCUE suggestions (deterministic ids => natural dedup)
-        for tr in self.world.static_tracks(PERSON):
+        # perception -> RESCUE suggestions (deterministic ids => natural dedup), only for people
+        # found by a search / flood recon (inside its area): a person on the street seen during a
+        # patrol or a chase is not a casualty and must not flood the operator with suggestions
+        areas = [t.params["area"] for t in reg.tasks.values()
+                 if t.kind == SEARCH and "area" in t.params and
+                 (not t.terminal or now - t.status_t <= 120.0)]
+        for tr in (self.world.static_tracks(PERSON) if areas else []):
+            if not any(min(a[0], a[2]) <= tr.x <= max(a[0], a[2]) and min(a[1], a[3]) <= tr.y <= max(a[1], a[3])
+                       for a in areas):
+                continue
             near = [t for t in reg.tasks.values() if t.kind == RESCUE and
                     math.hypot(t.x - tr.x, t.y - tr.y) <= 2 * self.cfg.perception.fuse_radius_m]
             if near:

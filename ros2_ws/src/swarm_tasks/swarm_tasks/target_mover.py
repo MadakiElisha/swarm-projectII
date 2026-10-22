@@ -8,7 +8,9 @@ With an OSM area it drives along real streets (road graph); otherwise straight.
 Publishes ground truth on /swarm/target_track; in Gazebo gz_quarry moves the car
 model so the drones' cameras see it. Never used on hardware.
 """
+import json
 import math
+import os
 import random
 import threading
 import time
@@ -26,8 +28,11 @@ class TargetMover(Node):
         super().__init__('target_mover')
         self.declare_parameter('speed', 6.0)
         self.declare_parameter('bearing', 75.0)       # straight-line fallback (no roads)
-        self.declare_parameter('duration', 240.0)
+        self.declare_parameter('duration', 3600.0)
         self.declare_parameter('seed', 7)
+        # the exhibition: the car is already driving when the scene starts (x,y metres from the
+        # origin, or "" = do not start until an INTERCEPT request / /swarm/sim/start_target)
+        self.declare_parameter('autostart', '')
         fleet = load_fleet()
         self.origin = fleet.swarm.origin
         roads = (fleet.area or {}).get('roads') or []
@@ -37,12 +42,38 @@ class TargetMover(Node):
         self.create_subscription(TaskRequest, '/swarm/sim/start_target', self.on_start, 10)
         self.thread = None
         self.stop_flag = threading.Event()
+        auto = str(self.get_parameter('autostart').value or '')
+        if auto == 'auto':
+            auto = self._auto_start(fleet)
+        if auto:
+            try:
+                ax, ay = (float(v) for v in auto.split(','))
+                la, lo = self.origin.to_latlon(ax, ay)
+                self.start(la, lo, 'already driving when the scene starts')
+            except ValueError:
+                self.get_logger().error(f'bad autostart {auto!r} (want x,y)')
         self.get_logger().info('target mover ready ('
                                + (f'{len(self.graph.nodes)} road nodes' if self.graph else 'no roads')
                                + ') - starts on INTERCEPT- requests or /swarm/sim/start_target')
 
+    def _auto_start(self, fleet):
+        """Where the car is when the scene starts: the Gazebo world's car if there is one,
+        else a street ~350 m from the launch site."""
+        info = os.environ.get('SWARM_GZ_INFO', '')
+        if info and os.path.isfile(info):
+            t = json.load(open(info)).get('target')
+            if t:
+                return f'{t[0]},{t[1]}'
+        pads = [fleet.home_enu(d.id) for d in fleet.drones]
+        px = sum(p[0] for p in pads) / len(pads) + 350.0
+        py = sum(p[1] for p in pads) / len(pads) + 120.0
+        if self.graph:
+            px, py = self.graph.nodes[self.graph.nearest((px, py))]
+        return f'{px:.1f},{py:.1f}'
+
     def on_request(self, msg):
-        if msg.task_id.startswith('INTERCEPT-'):
+        # the operator clicked on the car: if it is already driving, leave it alone
+        if msg.task_id.startswith('INTERCEPT-') and not (self.thread and self.thread.is_alive()):
             self.start(msg.lat, msg.lon, msg.task_id)
 
     def on_start(self, msg):

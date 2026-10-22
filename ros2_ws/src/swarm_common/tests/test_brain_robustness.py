@@ -26,6 +26,7 @@ def test_operator_confirm_promotes_suggestion():
     f = load_fleet()
     b = DroneBrain(f, 1)
     b.on_vehicle(OwnState(0.0, 0.0, 0.0, 0.0))
+    b.on_operator_task("SEARCH-1", 500.0, 500.0, 0.0, params={"area": [300.0, 300.0, 700.0, 700.0]})
     for k in range(3):
         b.on_detection("person", 500.0, 500.0, 0.9, float(k))
     out = b.tick(5.0)
@@ -33,3 +34,19 @@ def test_operator_confirm_promotes_suggestion():
     tid = out.suggestions[0].id
     assert b.on_operator_task(tid, 500.0, 500.0, 6.0) == "confirmed"
     assert b.registry.get(tid).status == "OPEN"
+
+
+def test_people_seen_outside_a_search_raise_no_suggestions():
+    """Patrols and chases see people on the street: they are not casualties."""
+    b = DroneBrain(load_fleet(), 1)
+    b.on_vehicle(OwnState(0.0, 0.0, 0.0, 0.0))
+    for k in range(5):
+        b.on_detection("person", 500.0, 500.0, 0.9, float(k))
+    out = b.tick(6.0)
+    assert not out.suggestions
+    assert not [t for t in b.registry.tasks.values() if t.kind == "RESCUE"]
+    # ...and inside a search area they do
+    b.on_operator_task("SEARCH-1", 500.0, 500.0, 7.0, params={"area": [300.0, 300.0, 700.0, 700.0]})
+    for k in range(3):
+        b.on_detection("person", 510.0, 505.0, 0.9, 8.0 + k)
+    assert b.tick(12.0).suggestions
