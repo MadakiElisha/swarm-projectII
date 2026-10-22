@@ -175,8 +175,12 @@ Timeline scrubbing replays any moment. Click a drone to select it and double-cli
 Live mode adds operator tools (Dispatch, Perimeter, Intercept, Search, Patrol, Flood recon, RTL/LAND/RESUME/E-STOP, ALL).
 
 * `?replay=demos/x.json` · `?live=ws://host:9090` · `?lite=1` (phones/weak GPUs) · `?t=500` (start time)
-* Settings ⚙: paste a free [Cesium ion](https://ion.cesium.com) token for world terrain, 3D buildings and
-  photorealistic tiles; choose the building style; open the other mission recordings.
+* Cesium ion token (free, [ion.cesium.com](https://ion.cesium.com)) for world terrain, 3D buildings and photorealistic
+  tiles: paste it in Settings ⚙ (per browser), or once per machine
+  `echo "window.SW_ION_TOKEN = '<token>';" > gcs/config.local.js` (git-ignored). For the GitHub Pages demo add it
+  as the repo secret `CESIUM_ION_TOKEN`.
+* Settings ⚙ also: choose the building style (by height / white / photorealistic / off) and open the
+  other mission recordings.
 * Recordings: `demos/showcase.json`, `demos/patrol.json`, `demos/flood.json`. Record your own:
   `python3 scripts/record_demo.py --mission patrol --fleet areas/eko/fleet.yaml` (flies among real buildings).
 * Publish the replay at a public link: enable GitHub Pages (Source: GitHub Actions), then run the

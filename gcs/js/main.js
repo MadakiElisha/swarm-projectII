@@ -23,7 +23,7 @@ var SW = window.SW || (window.SW = {});
     var ov = SW.overlays = new SW.Overlays(scene, store);
     if (source.kind === 'replay') ov.addTruth(source.meta.victims);
     var ui = SW.ui = new SW.UI(store, scene, ov, source);
-    if (!SW.settings.get('ionToken') && !SW.settings.get('tokenHint')) {
+    if (!SW.settings.get('ionToken') && !window.SW_ION_TOKEN && !SW.settings.get('tokenHint')) {
       SW.settings.set('tokenHint', '1');
       setTimeout(function () {
         ui.toast('Tip: paste a free Cesium ion token in ⚙ Settings for 3D terrain, city buildings and photorealistic tiles');

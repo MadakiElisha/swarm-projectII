@@ -13,7 +13,7 @@ SW.Scene = function (container, store, opts) {
   this.modelUri = opts.modelUri || 'assets/drone.glb';
   this.layers = { links: true, packets: true, consensus: true, avoidance: true, coverage: true,
                   sensors: true, trails: true, target: true, truth: false, labels: true };
-  var token = SW.settings.get('ionToken');
+  var token = SW.settings.get('ionToken') || window.SW_ION_TOKEN || '';
   if (token) Cesium.Ion.defaultAccessToken = token;
   var imagery = new Cesium.UrlTemplateImageryProvider({
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',

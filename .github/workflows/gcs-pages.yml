@@ -20,6 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # optional repo secret CESIUM_ION_TOKEN -> 3D terrain/buildings on the public page.
+      # A browser app's token is visible to visitors: restrict it to this site's URL in ion.
+      - name: Cesium ion token
+        env:
+          TOKEN: ${{ secrets.CESIUM_ION_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then printf "window.SW_ION_TOKEN = '%s';\n" "$TOKEN" > gcs/config.local.js; fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: gcs
