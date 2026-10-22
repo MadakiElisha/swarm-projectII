@@ -90,6 +90,7 @@ if has venv; then
   . "$VENV/bin/activate"
   pip install -U pip
   pip install pyyaml pymavlink pytest flake8 matplotlib
+  pip install -r "$ROOT/scripts/gz/requirements.txt"      # Gazebo world builder
 fi
 
 if has torch; then

@@ -369,6 +369,18 @@ export SWARM_GZ_INFO="{out}/world.json"
     return out
 
 
+def _check_deps():
+    missing = []
+    for mod in ("trimesh", "shapely", "mapbox_earcut"):
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(mod)
+    if missing:
+        sys.exit(f"missing Python packages: {', '.join(missing)}\n"
+                 f"  pip install -r {os.path.relpath(os.path.join(HERE, 'requirements.txt'))}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--fleet", default=None, help="fleet.yaml (default $SWARM_FLEET)")
@@ -386,7 +398,9 @@ def main():
     ap.add_argument("--no-fuel", action="store_true", help="primitive people/cars (no internet)")
     ap.add_argument("--synthetic", action="store_true", help="synthetic city if the fleet has no area")
     ap.add_argument("--seed", type=int, default=1)
-    build(ap.parse_args())
+    args = ap.parse_args()
+    _check_deps()
+    build(args)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+# scripts/gz/make_world.py: building meshes and collision boxes from OSM footprints
+trimesh>=4
+shapely>=2
+mapbox_earcut
+networkx
