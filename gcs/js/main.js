@@ -53,7 +53,8 @@ var SW = window.SW || (window.SW = {});
   }
 
   function live(url) {
-    return fetchJSON('fleet.json').then(function (fleet) {
+    // fleet.local.json (written by scripts/gz/up.sh for the running area) wins over the repo's fleet.json
+    return fetchJSON('fleet.local.json').catch(function () { return fetchJSON('fleet.json'); }).then(function (fleet) {
       var src = new SW.LiveSource(url, fleet);
       start(src);
       return src;

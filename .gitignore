@@ -34,3 +34,4 @@ areas/*/osm.json
 
 # local Cesium ion token for the web GCS
 gcs/config.local.js
+gcs/fleet.local.json

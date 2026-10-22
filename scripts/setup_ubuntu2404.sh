@@ -102,7 +102,16 @@ if has torch; then
   . "$VENV/bin/activate"
   if command -v nvidia-smi > /dev/null && nvidia-smi > /dev/null 2>&1; then
     # RTX 50-series (Blackwell, sm_120) needs CUDA 12.8+ wheels
-    pip install --index-url "${TORCH_INDEX:-https://download.pytorch.org/whl/cu128}" torch torchvision
+    # RTX 50-series (Blackwell, sm_120) needs CUDA >= 12.8 builds. The default PyPI wheels
+    # bundle CUDA 13 (needs driver >= 580); older drivers get the cu128 build.
+    DRV=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | cut -d. -f1)
+    if [ -n "${TORCH_INDEX:-}" ]; then
+      pip install --index-url "$TORCH_INDEX" torch torchvision
+    elif [ "${DRV:-0}" -ge 580 ]; then
+      pip install torch torchvision
+    else
+      pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision
+    fi
   else
     echo "no working NVIDIA driver: installing CPU PyTorch (fine for running, slow for training)"
     pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision

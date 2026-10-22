@@ -37,55 +37,94 @@ CARS = ["Hatchback blue", "Hatchback red", "SUV", "Pickup"]
 
 
 # ------------------------------------------------------------------ meshes
-def _mesh_buildings(area, out_dir, chunk=400):
+# Buildings coloured by height (same ramp as the web GCS): low = warm sand, tall = violet.
+HEIGHT_BANDS = [(0, "0.86 0.83 0.76"), (10, "0.93 0.80 0.52"), (20, "0.91 0.62 0.36"),
+                (40, "0.85 0.40 0.27"), (80, "0.70 0.22 0.50"), (150, "0.38 0.18 0.55")]
+
+
+def _band(h):
+    k = 0
+    while k + 1 < len(HEIGHT_BANDS) and h >= HEIGHT_BANDS[k + 1][0]:
+        k += 1
+    return k
+
+
+def _write_obj(meshes, path, rgb):
+    """OBJ with per-face (flat) normals and its own MTL colour. Gazebo's renderer needs
+    normals to shade walls vs roofs; without them everything renders flat white."""
+    import trimesh
+    m = trimesh.util.concatenate(meshes)
+    base = os.path.splitext(os.path.basename(path))[0]
+    r, g, b = (float(v) for v in rgb.split())
+    with open(os.path.splitext(path)[0] + ".mtl", "w") as f:
+        f.write(f"newmtl {base}\nKa {r * 0.6:.3f} {g * 0.6:.3f} {b * 0.6:.3f}\nKd {r:.3f} {g:.3f} {b:.3f}\n"
+                f"Ks 0.05 0.05 0.05\nNs 10\nd 1.0\nillum 2\n")
+    v, fc, fn = m.vertices, m.faces, m.face_normals
+    with open(path, "w") as f:
+        f.write(f"mtllib {base}.mtl\no {base}\n")
+        f.write("".join(f"v {x:.2f} {y:.2f} {z:.2f}\n" for x, y, z in v))
+        f.write("".join(f"vn {x:.4f} {y:.4f} {z:.4f}\n" for x, y, z in fn))
+        f.write(f"usemtl {base}\n")
+        f.write("".join(f"f {a + 1}//{k + 1} {b + 1}//{k + 1} {c + 1}//{k + 1}\n"
+                        for k, (a, b, c) in enumerate(fc)))
+
+
+def _extrude(poly_pts, height, base=0.0):
     import trimesh
     from shapely.geometry import Polygon
-    paths = []
-    blds = area["buildings"]
-    for c in range(0, len(blds), chunk):
-        parts = []
-        for b in blds[c:c + chunk]:
-            try:
-                poly = Polygon(b["poly"])
-                if not poly.is_valid:
-                    poly = poly.buffer(0)
-                if poly.is_empty or poly.area < 4:
+    poly = Polygon(poly_pts)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    if poly.is_empty or poly.area < 1:
+        return []
+    out = []
+    for p in (list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]):
+        m = trimesh.creation.extrude_polygon(p, height)
+        if base:
+            m.apply_translation([0, 0, base])
+        out.append(m)
+    return out
+
+
+def _mesh_buildings(area, out_dir, chunk=500):
+    """-> [(obj file name, rgb)], one group per height band (and chunk of buildings)."""
+    bands = {}
+    for b in area["buildings"]:
+        bands.setdefault(_band(b["h"]), []).append(b)
+    out = []
+    for k, blds in sorted(bands.items()):
+        for c in range(0, len(blds), chunk):
+            parts = []
+            for b in blds[c:c + chunk]:
+                try:
+                    if _poly_area(b["poly"]) < 4:
+                        continue
+                    parts += _extrude(b["poly"], max(2.0, b["h"] - b.get("base", 0.0)), b.get("base", 0.0))
+                except Exception:
                     continue
-                polys = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
-                for p in polys:
-                    m = trimesh.creation.extrude_polygon(p, max(2.0, b["h"] - b.get("base", 0.0)))
-                    if b.get("base"):
-                        m.apply_translation([0, 0, b["base"]])
-                    parts.append(m)
-            except Exception:
-                continue
-        if parts:
-            name = f"buildings_{c // chunk}.obj"
-            trimesh.util.concatenate(parts).export(os.path.join(out_dir, name))
-            paths.append(name)
-    return paths
+            if parts:
+                name = f"buildings_h{k}_{c // chunk}.obj"
+                _write_obj(parts, os.path.join(out_dir, name), HEIGHT_BANDS[k][1])
+                out.append((name, HEIGHT_BANDS[k][1]))
+    return out
 
 
-def _mesh_flat(polys, out_dir, name, z=0.02, thickness=0.05):
-    import trimesh
-    from shapely.geometry import Polygon
+def _poly_area(pts):
+    return abs(sum(pts[i][0] * pts[i - 1][1] - pts[i - 1][0] * pts[i][1] for i in range(len(pts)))) / 2
+
+
+def _mesh_flat(polys, out_dir, name, rgb, z=0.02, thickness=0.05):
     parts = []
     for pts in polys:
         try:
-            p = Polygon(pts)
-            if not p.is_valid:
-                p = p.buffer(0)
-            if p.is_empty:
-                continue
-            for q in (list(p.geoms) if p.geom_type == "MultiPolygon" else [p]):
-                m = trimesh.creation.extrude_polygon(q, thickness)
+            for m in _extrude(pts, thickness):
                 m.apply_translation([0, 0, z])
                 parts.append(m)
         except Exception:
             continue
     if not parts:
         return None
-    trimesh.util.concatenate(parts).export(os.path.join(out_dir, name))
+    _write_obj(parts, os.path.join(out_dir, name), rgb)
     return name
 
 
@@ -124,18 +163,23 @@ def _building_boxes(area):
     return out
 
 
-def _static_model(models_dir, name, meshes, rgba, collide=True, transparency=0.0, boxes=None):
+def _static_model(models_dir, name, meshes, rgb=None, collide=True, transparency=0.0, boxes=None):
+    """meshes: [file] or [(file, "r g b")]."""
     d = os.path.join(models_dir, name)
     os.makedirs(os.path.join(d, "meshes"), exist_ok=True)
     links = []
     for k, m in enumerate(meshes):
+        m, col_rgb = m if isinstance(m, tuple) else (m, rgb)
+        r, g, b = (float(v) for v in col_rgb.split())
         uri = f"model://{name}/meshes/{m}"
         col = (f"<collision name='c{k}'><geometry><mesh><uri>{uri}</uri></mesh></geometry></collision>"
                if collide else "")
         shadows = str(collide or bool(boxes)).lower()
         links.append(f"""
       <visual name='v{k}'><geometry><mesh><uri>{uri}</uri></mesh></geometry>
-        <material><ambient>{rgba}</ambient><diffuse>{rgba}</diffuse><specular>0.1 0.1 0.1 1</specular></material>
+        <material><ambient>{r * 0.6:.3f} {g * 0.6:.3f} {b * 0.6:.3f} 1</ambient><diffuse>{r:.3f} {g:.3f} {b:.3f} 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+          <pbr><metal><metalness>0.0</metalness><roughness>0.85</roughness></metal></pbr></material>
         <transparency>{transparency}</transparency><cast_shadows>{shadows}</cast_shadows></visual>{col}""")
     for k, (cx, cy, cz, yaw, L, W, H) in enumerate(boxes or []):
         links.append(f"""
@@ -260,20 +304,19 @@ def build(args):
     bdir = os.path.join(models, "city_buildings", "meshes")
     os.makedirs(bdir, exist_ok=True)
     bmeshes = _mesh_buildings(area, bdir)
-    _static_model(models, "city_buildings", bmeshes, "0.78 0.77 0.74 1", collide=False,
-                  boxes=_building_boxes(area))
+    _static_model(models, "city_buildings", bmeshes, collide=False, boxes=_building_boxes(area))
     parts = ["city_buildings"]
     wdir = os.path.join(models, "city_water", "meshes")
     os.makedirs(wdir, exist_ok=True)
-    wm = _mesh_flat([w["poly"] for w in area.get("water", [])], wdir, "water.obj", z=0.01)
+    wm = _mesh_flat([w["poly"] for w in area.get("water", [])], wdir, "water.obj", "0.10 0.35 0.55", z=0.01)
     if wm:
-        _static_model(models, "city_water", [wm], "0.10 0.35 0.55 1", collide=False)
+        _static_model(models, "city_water", [wm], "0.10 0.35 0.55", collide=False)
         parts.append("city_water")
     rdir = os.path.join(models, "city_roads", "meshes")
     os.makedirs(rdir, exist_ok=True)
-    rm = _mesh_flat(_road_polys(area), rdir, "roads.obj", z=0.03)
+    rm = _mesh_flat(_road_polys(area), rdir, "roads.obj", "0.22 0.22 0.24", z=0.03)
     if rm:
-        _static_model(models, "city_roads", [rm], "0.16 0.16 0.17 1", collide=False)
+        _static_model(models, "city_roads", [rm], "0.22 0.22 0.24", collide=False)
         parts.append("city_roads")
 
     # --- drones
@@ -330,7 +373,7 @@ def build(args):
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
     <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
     <plugin filename="gz-sim-navsat-system" name="gz::sim::systems::NavSat"/>{sensors}
-    <scene><ambient>0.6 0.6 0.6 1</ambient><background>0.65 0.78 0.9 1</background><shadows>true</shadows></scene>
+    <scene><ambient>0.45 0.45 0.45 1</ambient><background>0.65 0.78 0.9 1</background><shadows>true</shadows></scene>
     <spherical_coordinates>
       <surface_model>EARTH_WGS84</surface_model><world_frame_orientation>ENU</world_frame_orientation>
       <latitude_deg>{o.lat:.7f}</latitude_deg><longitude_deg>{o.lon:.7f}</longitude_deg>

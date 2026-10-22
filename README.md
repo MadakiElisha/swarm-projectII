@@ -28,6 +28,7 @@ generator. The ground station is an optional observer and operator uplink.
 
 How it works and what each mechanism guarantees: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** ·
 fresh machine to swarm flying over Lagos: **[docs/SETUP_UBUNTU_24.04.md](docs/SETUP_UBUNTU_24.04.md)** ·
+start it and test every mission, step by step: **[docs/RUNBOOK.md](docs/RUNBOOK.md)** ·
 drones, radios, launch sites: **[docs/HARDWARE.md](docs/HARDWARE.md)**.
 
 Demos of the previous (centralized-auction) version: [main_swarm.mp4](main_swarm.mp4) ·

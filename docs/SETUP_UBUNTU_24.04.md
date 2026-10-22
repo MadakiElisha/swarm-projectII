@@ -101,6 +101,10 @@ these buildings, and the GCS draws them.
 
 5 drones is the sweet spot on 16 GB RAM with cameras on; 7 works with `--no-camera`.
 
+> **Day to day, use [RUNBOOK.md](RUNBOOK.md)**: `python3 scripts/check.py eko`, then
+> `scripts/gz/up.sh eko` opens every part in its own tab, and `scripts/mission.py`
+> drives each mission. The section below is the same thing by hand.
+
 ## 4. First flight in Gazebo (real ArduPilot, real physics)
 
 **Terminal 1: world + autopilots**
@@ -130,7 +134,7 @@ Until you have trained weights (section 6) it falls back to the stock `yolo11n.p
 
 ```bash
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml &
-python3 scripts/fleet_info.py --json > gcs/fleet.json      # includes the area's buildings
+python3 scripts/fleet_info.py --json > gcs/fleet.local.json   # includes the area's buildings
 cd gcs && python3 -m http.server 8080                       # open http://localhost:8080
 ```
 
