@@ -458,8 +458,38 @@ def intercept_chase(seed=31, loss=0.1) -> ScenarioResult:
     return r
 
 
+def chase_among_towers(seed=33, loss=0.1) -> ScenarioResult:
+    """A car driving down a street between 60-110 m towers. Chasing it, drones switch between
+    search height (wide view) and ring height again and again, right next to and over roofs:
+    nobody may descend onto a roof or fly into a wall (the Gazebo crash this guards against)."""
+    from ..area import synthetic_city
+    from ..config import DroneSpec, Fleet
+    area = synthetic_city(blocks=6, seed=11)
+    sw = SwarmCfg()
+    lx, ly = area["launch"]
+    drones = []
+    for i in range(4):
+        lat, lon = sw.origin.to_latlon(lx + (i % 2) * 15 - 8, ly + (i // 2) * 15 - 8)
+        drones.append(DroneSpec(id=i + 1, home_lat=lat, home_lon=lon))
+    sim = SwarmSim(Fleet(swarm=sw, drones=drones, area=area), seed=seed, net=NetCfg(loss=loss))
+    sim.realistic_detector = True
+    sim.camera_only = True
+    sim.quarry = Quarry(-440, 135, 5.0, 0.0, start=0.0, stop=900.0)       # east along y=135
+    q0 = sim.quarry.at(20.0)
+    sim.at(20.0, lambda s: s.operator_task("INTERCEPT-T", q0[0], q0[1], to={1, 2}, params={"heading_deg": 90.0}))
+    sim.run(420)
+    r = ScenarioResult("chase_among_towers", sim)
+    r.notes.append(f"towers up to {area['max_h']:.0f} m; building strikes {sim.building_hits} "
+                   f"{sim.building_log[:3]}")
+    r.checks["no drone ever entered a building"] = sim.building_hits == 0
+    r.checks["ring formed around the car"] = "PERIMETER_FORMED" in sim.event_names("INTERCEPT-T")
+    r.checks["no loss of separation"] = sim.los_samples == 0
+    return r
+
+
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
     "intercept_chase": intercept_chase,
+    "chase_among_towers": chase_among_towers,
     "flood_recon": flood_recon,
     "patrol_intruder": patrol_intruder,
     "intercept_with_decoys": intercept_with_decoys,

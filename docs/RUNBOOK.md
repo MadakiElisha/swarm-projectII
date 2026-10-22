@@ -162,6 +162,14 @@ scripts/gz/view.sh free           # stop following (mouse control)
 Detection boxes: GCS **▣ Cameras** (⧉ for a separate window), or
 `ros2 run rqt_image_view rqt_image_view /swarm/D1/camera/annotated`.
 
+Notes for Gazebo:
+* If the PC can't keep Gazebo at real time, everything (drones, car, cameras) slows down together:
+  the drones' software runs on Gazebo's clock. The status board then looks slow – that's expected.
+* Build the world **with internet** the first time so it downloads real car and people models; offline
+  it uses plain boxes and cylinders, which the YOLO detector doesn't recognise (only the simulated
+  cameras would see them).
+* A drone sent home (RTL) first climbs above the tallest building on its way, then flies home.
+
 Gazebo and the light mode are separate sessions: stop one (`scripts/swarm_down.sh`) before
 starting the other.
 

@@ -27,6 +27,16 @@ class Planner:
             return False                         # outside the mapped area: open
         return g.h[j * g.nx + i] > alt - self.clear
 
+    def roof_top(self, p: Pt) -> float:
+        """Tallest roof in my cell and its neighbours (0 over open ground)."""
+        ci, cj = self._cell(p)
+        g, top = self.g, 0.0
+        for j in range(cj - 1, cj + 2):
+            for i in range(ci - 1, ci + 2):
+                if 0 <= i < g.nx and 0 <= j < g.ny:
+                    top = max(top, g.h[j * g.nx + i])
+        return top
+
     def _cell(self, p: Pt) -> Tuple[int, int]:
         return int((p[0] - self.g.x0) // self.g.cell), int((p[1] - self.g.y0) // self.g.cell)
 

@@ -312,6 +312,12 @@ class DroneBrain:
             alt = self.alt
             if self.phase in ("SEARCH", "HUNTING") or self._wide_view:   # higher = wider camera footprint
                 alt = self.cfg.coverage.search_alt_m + (self.alt - self.cfg.motion.base_alt_m)
+            if self.planner is not None and airborne:
+                # above a roof (changing layer, leaving a search): don't descend onto it - stay
+                # clear of it until I'm past it. Beside a taller building (a street) the brake rules.
+                top = self.planner.roof_top(pos)
+                if top > 0.0 and s.alt >= top:
+                    alt = max(alt, top + self.planner.clear + 2.0)
             cur = self.items.get(self._cur_item)
             mcfg = self.cfg.motion
             if cur is not None and cur.kind == INTERCEPT:   # scramble / chase at full speed
@@ -324,7 +330,8 @@ class DroneBrain:
             nbrs = [((k[1], k[2]), (k[4], k[5]), k[3]) for i, k in self.kin.items()
                     if now - k[0] <= BEACON_FRESH_S]
             v = avoid(pos, (s.vx, s.vy), pref, s.alt, nbrs, self.cfg.motion, dt) if airborne else pref
-            v = self._building_brake(pos, v, alt)
+            # brake at the altitude I'm at, not the one I'm climbing to (still below the roofs)
+            v = self._building_brake(pos, v, min(alt, s.alt) if airborne else alt)
             v = limit_accel(self._vel, v, self.cfg.motion.max_accel_mps2, dt)
             self._vel = v
             out.setpoint = Setpoint(now, SP_VEL, v[0], v[1], 0.0, alt=alt)
