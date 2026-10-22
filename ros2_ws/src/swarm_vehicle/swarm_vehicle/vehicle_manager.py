@@ -28,6 +28,7 @@ from swarm_interfaces.msg import VehicleState
 
 ALT_GAIN = 0.8          # vertical speed per metre of altitude error
 MAX_VZ = 4.0             # m/s (autopilot allows WPNAV_SPEED_UP = 5 m/s)
+RTL_CLEARANCE_M = 15.0  # autopilot RTL altitude: this far above the tallest building on the way home
 
 
 class VehicleManager(Node):
@@ -58,6 +59,16 @@ class VehicleManager(Node):
         self._pending = None
         self._obs = None
         self._rtl_alt_set = not self.get_parameter('stagger_rtl_alt').value
+        # the autopilot's own RTL (operator RTL, critical battery, geofence, lost brain) flies a
+        # straight line home at RTL_ALT: keep RTL_ALT above the tallest building on that line
+        self._manage_rtl_alt = bool(self.get_parameter('stagger_rtl_alt').value)
+        self._grid = None
+        if self.fleet.area and self.fleet.area.get('buildings'):
+            from swarm_common.area import height_grid
+            self._grid = height_grid(self.fleet.area, cell=10.0)
+        self._rtl_alt_m = None
+        self._next_rtl_check = 0.0
+        self.param_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'{self.label}-param')
         self._unknown_batt_warned = False
 
         self.state_pub = self.create_publisher(VehicleState, f'/swarm/{self.label}/vehicle_state', 10)
@@ -107,8 +118,8 @@ class VehicleManager(Node):
             return
         if not self._rtl_alt_set:
             self._rtl_alt_set = True
-            alt_cm = altitude_layer(self.id, self.fleet.swarm.motion) * 100.0
-            self.pool.submit(self._set_rtl_alt, alt_cm)
+            self._rtl_alt_m = altitude_layer(self.id, self.fleet.swarm.motion)
+            self.param_pool.submit(self._set_rtl_alt, self._rtl_alt_m * 100.0)
         batt = snap.battery_pct
         if batt < 0:
             if not self._unknown_batt_warned:
@@ -117,6 +128,9 @@ class VehicleManager(Node):
             batt = 50.0
         x, y = self.origin.to_enu(snap.lat, snap.lon)
         self._obs = VehicleObs(now, x, y, snap.alt, batt, snap.armed, snap.mode)
+        if self._manage_rtl_alt and self._grid is not None and snap.armed and now >= self._next_rtl_check:
+            self._next_rtl_check = now + 2.0
+            self._update_rtl_alt(x, y)
         self._execute(self.fsm.tick(self._obs, now))
         self._drain_events()
         self._publish_state(snap, connected=True, x=x, y=y, batt=batt)
@@ -150,6 +164,19 @@ class VehicleManager(Node):
             else:
                 self.get_logger().error(f'{self.label}: {kind} FAILED: {st.reason}')
         self._pending = self.pool.submit(run)
+
+    def _update_rtl_alt(self, x, y):
+        from swarm_common.area import corridor_max_height
+        layer = altitude_layer(self.id, self.fleet.swarm.motion)
+        need = max(layer, corridor_max_height(self._grid, (x, y), self.home) + RTL_CLEARANCE_M)
+        ceiling = self.fleet.swarm.geofence.max_alt_m - 2.0
+        if need > ceiling:
+            self.get_logger().warn(f'{self.label}: buildings on the way home need {need:.0f} m, '
+                                   f'above the {ceiling:.0f} m ceiling', throttle_duration_sec=60)
+            need = ceiling
+        if self._rtl_alt_m is None or abs(need - self._rtl_alt_m) >= 5.0:
+            self._rtl_alt_m = need
+            self.param_pool.submit(self._set_rtl_alt, need * 100.0)
 
     def _set_rtl_alt(self, alt_cm):
         st = self.backend.set_param('RTL_ALT', alt_cm)
@@ -194,6 +221,7 @@ class VehicleManager(Node):
 
     def destroy_node(self):
         self.pool.shutdown(wait=False)
+        self.param_pool.shutdown(wait=False)
         self.backend.close()
         super().destroy_node()
 

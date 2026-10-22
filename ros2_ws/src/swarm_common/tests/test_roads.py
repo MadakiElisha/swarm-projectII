@@ -33,3 +33,13 @@ def test_shortest_and_along():
     assert p[0] == (-300.0, -300.0) and p[-1] == (300.0, 300.0) and len(p) == 5
     (x, y), h = along([(0, 0), (100, 0), (100, 100)], 150)
     assert (x, y) == (100, 50) and abs(h - math.pi / 2) < 1e-9
+
+
+def test_corridor_max_height_sees_buildings_on_the_line_only():
+    from swarm_common.area import corridor_max_height, height_grid
+    area = {"buildings": [{"poly": [[90, -10], [110, -10], [110, 10], [90, 10]], "h": 60.0},
+                          {"poly": [[90, 200], [110, 200], [110, 220], [90, 220]], "h": 90.0}]}
+    g = height_grid(area, cell=10.0)
+    assert corridor_max_height(g, (0, 0), (200, 0)) == 60.0      # through the 60 m block
+    assert corridor_max_height(g, (0, 60), (200, 60)) == 0.0     # 50 m clear of it
+    assert corridor_max_height(g, (0, 0), (0, 0)) == 0.0

@@ -196,6 +196,22 @@ def height_grid(area: dict, cell: float = 10.0, margin: float = 200.0, dilate: b
     return HeightGrid(x0, y0, cell, nx, ny, dil, water)
 
 
+def corridor_max_height(grid: "HeightGrid", a: Pt, b: Pt, half_width: float = 15.0) -> float:
+    """Tallest obstacle within half_width of the straight segment a->b (e.g. an autopilot's RTL path)."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    d = math.hypot(dx, dy)
+    n = max(1, int(d / (grid.cell / 2)))
+    ux, uy = (dx / d, dy / d) if d > 1e-6 else (1.0, 0.0)
+    best = 0.0
+    k = max(1, int(half_width / (grid.cell / 2)))
+    for i in range(n + 1):
+        x, y = a[0] + dx * i / n, a[1] + dy * i / n
+        for j in range(-k, k + 1):
+            off = half_width * j / k
+            best = max(best, grid.height_at(x - uy * off, y + ux * off))
+    return best
+
+
 def find_launch_site(area: dict, clear_m: float = 40.0) -> Pt:
     """Open dry ground near the centre with no building within clear_m (a square, a field)."""
     if not area["buildings"]:
