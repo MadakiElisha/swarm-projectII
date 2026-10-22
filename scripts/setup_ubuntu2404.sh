@@ -89,12 +89,15 @@ if has venv; then
   # shellcheck disable=SC1091
   . "$VENV/bin/activate"
   pip install -U pip
+  # ROS/apt modules are built for NumPy 1.x: every pip install below respects these pins
+  export PIP_CONSTRAINT="$ROOT/scripts/venv-constraints.txt"
   pip install pyyaml pymavlink pytest flake8 matplotlib
   pip install -r "$ROOT/scripts/gz/requirements.txt"      # Gazebo world builder
 fi
 
 if has torch; then
   say "Perception: PyTorch (CUDA) + Ultralytics + SAHI"
+  export PIP_CONSTRAINT="$ROOT/scripts/venv-constraints.txt"
   # shellcheck disable=SC1091
   . "$VENV/bin/activate"
   if command -v nvidia-smi > /dev/null && nvidia-smi > /dev/null 2>&1; then

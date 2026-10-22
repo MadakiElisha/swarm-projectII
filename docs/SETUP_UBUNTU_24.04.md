@@ -208,6 +208,7 @@ python perception/visdrone.py install --weights runs/visdrone/yolo11s/weights/be
 | drones never take off | `ros2 topic echo /swarm/D1/vehicle_state` – is `connected: true`? SITL must be up before the launch file |
 | `CUDA error: no kernel image is available` | PyTorch built without sm_120: reinstall with the cu128 (or newer) index |
 | GCS shows "OFFLINE" | rosbridge not running, or wrong URL in ⚙ |
+| `numpy.dtype size changed` / "compiled using NumPy 1.x cannot be run in NumPy 2" | a NumPy 2 got into the venv and Ubuntu's scipy/ROS modules need 1.x: `pip install -c scripts/venv-constraints.txt "numpy<2" "opencv-python<4.12"` |
 | `make_area.py` times out | Overpass is busy; retry, or `OVERPASS_URL=https://overpass.kumi.systems/api/interpreter` |
 
 ## 9. What is real and what is still simulated here

@@ -1,0 +1,6 @@
+# The swarm venv is created with --system-site-packages so ROS 2 Jazzy's Python works in it.
+# Ubuntu 24.04's apt Python modules (scipy, cv_bridge, ...) are compiled against NumPy 1.26:
+# a NumPy 2 in the venv breaks them ("numpy.dtype size changed"). Keep NumPy 1.x here.
+numpy<2
+opencv-python<4.12
+opencv-python-headless<4.12
