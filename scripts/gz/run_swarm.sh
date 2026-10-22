@@ -37,5 +37,18 @@ while read -r id label; do
         --defaults "$P/copter.parm,$P/gazebo-iris.parm,$ROOT/scripts/sitl_swarm.parm" \
         --home "$ORIGIN,0,0" > "$LOG/$label.log" 2>&1 < /dev/null & ) > /dev/null 2>&1
 done < "$LOG/drones.txt"
-echo "[gz] up. GPS lock takes ~30-60 s. Logs: $LOG"
+# health check: every autopilot must still be running and talking to Gazebo
+sleep 12
+N=$(wc -l < "$LOG/drones.txt")
+UP=$(pgrep -x arducopter | wc -l)
+if [ "$UP" -lt "$N" ]; then
+    echo "[gz] PROBLEM: only $UP of $N autopilots are running. Last lines of their logs:"
+    while read -r id label; do
+        pgrep -f -- "-I$id --model JSON" > /dev/null || { echo "--- $label"; tail -n 4 "$LOG/$label.log"; }
+    done < "$LOG/drones.txt"
+    echo "[gz] (\"Exitting\" = it was stopped by a signal, e.g. scripts/swarm_down.sh run afterwards)"
+    exit 1
+fi
+pgrep -f "worlds/swarm.sdf" > /dev/null || { echo "[gz] PROBLEM: Gazebo is not running: $LOG/gazebo.log"; exit 1; }
+echo "[gz] OK: Gazebo + $UP/$N autopilots running. GPS lock takes ~30-60 s. Logs: $LOG"
 echo "[gz] next: ros2 launch swarm_bringup swarm_gazebo.launch.py"

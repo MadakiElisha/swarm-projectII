@@ -9,4 +9,5 @@ for pat in "ros2 launch swarm_bringup" "rosbridge_websocket" "http.server 8080" 
         [ "$pid" != "$$" ] && [ "$pid" != "$PPID" ] && kill "$pid" 2>/dev/null
     done
 done
-echo "swarm down"
+mkdir -p "$(dirname "$0")/../logs/gz" && echo "$(date '+%F %T') swarm_down.sh run from $(tty 2>/dev/null)" >> "$(dirname "$0")/../logs/gz/down.log"
+echo "swarm down (Gazebo, autopilots and all swarm nodes stopped)"
