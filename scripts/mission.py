@@ -68,7 +68,6 @@ def main():
     req = node.create_publisher(TaskRequest, "/swarm/task_requests", 10)
     sim = node.create_publisher(TaskRequest, "/swarm/sim/start_target", 10)
     cmd = node.create_publisher(DroneCommand, "/swarm/commands", 10)
-    time.sleep(1.5)                                   # let discovery connect the publishers
 
     n = int(time.time()) % 100000
     at = _xy(a.at) if a.at else None
@@ -120,6 +119,12 @@ def main():
             msgs.append((req, m, f"{m.task_id} at {at[0]:.0f},{at[1]:.0f}" +
                          (f"  ({m.description})" if m.description else "")))
     for pub, m, text in msgs:
+        t_end = time.time() + 8.0                 # wait for discovery: someone must be listening
+        while pub.get_subscription_count() == 0 and time.time() < t_end:
+            rclpy.spin_once(node, timeout_sec=0.2)
+        if pub.get_subscription_count() == 0:
+            print(f"warning: nobody is subscribed to {pub.topic_name} - is the swarm launch running?")
+        time.sleep(0.5)
         for _ in range(3):                        # best effort: brains dedupe by id
             pub.publish(m)
             time.sleep(0.2)
