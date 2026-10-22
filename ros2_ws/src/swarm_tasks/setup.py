@@ -21,6 +21,7 @@ setup(
             'gz_quarry = swarm_tasks.gz_quarry:main',
             'target_mover = swarm_tasks.target_mover:main',
             'sim_world = swarm_tasks.sim_world:main',
+            'sim_clock = swarm_tasks.sim_clock:main',
         ],
     },
 )

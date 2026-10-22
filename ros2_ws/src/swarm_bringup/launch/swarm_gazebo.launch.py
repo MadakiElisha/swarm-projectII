@@ -9,6 +9,7 @@ camera topics a real drone publishes. Brains emulate radio range/loss (one
 machine); everything else is what flies on hardware.
 
 Arguments: perception:=true|false  model:=<yolo weights>  water_model:=hsv|<seg weights>  loss:=0.1
+           target:=auto|off  sim_time:=true|false (brains on Gazebo's clock)
 """
 import json
 import os
@@ -33,10 +34,20 @@ def _setup(context):
     cams = bool(info.get('camera'))
     cam_labels = info.get('camera_labels') or ([d.label for d in fleet.drones] if cams else [])
     want_perception = lc('perception').lower() == 'true' and bool(cam_labels)
+    # brains, the car and the simulated cameras run on Gazebo's clock: if the PC can't keep
+    # Gazebo at real time, everything slows down together instead of the drones falling behind
+    st = lc('sim_time').lower() == 'true'
     nodes = []
+    if st:
+        world = info.get('world_name', 'swarm')
+        nodes.append(Node(package='ros_gz_bridge', executable='parameter_bridge', name='gz_clock_bridge',
+                          arguments=[f'/world/{world}/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+                          remappings=[(f'/world/{world}/clock', '/gz/clock')], output='log'))
+        nodes.append(Node(package='swarm_tasks', executable='sim_clock', name='sim_clock', output='screen'))
     for d in fleet.drones:
         # every drone DETECTS the target (camera+YOLO, or the simulated camera) - nobody is handed it
-        nodes += drone_nodes(d.id, 'mavlink', lc('fleet_file'), '', True, float(lc('loss')), sim_target=False)
+        nodes += drone_nodes(d.id, 'mavlink', lc('fleet_file'), '', True, float(lc('loss')), sim_target=False,
+                             sim_time=st)
     if cam_labels:
         topics = [f'/swarm/{lab}/camera/image@sensor_msgs/msg/Image[gz.msgs.Image' for lab in cam_labels]
         nodes.append(Node(package='ros_gz_bridge', executable='parameter_bridge', name='gz_camera_bridge',
@@ -58,10 +69,10 @@ def _setup(context):
     if sim_cams:
         nodes.append(Node(package='swarm_tasks', executable='sim_world', name='sim_world', output='screen',
                           parameters=[{'fleet_file': lc('fleet_file'), 'flood': bool(info.get('flood_m')),
-                                       'only_labels': sim_cams}]))
+                                       'only_labels': sim_cams, 'use_sim_time': st}]))
     nodes.append(Node(package='swarm_mesh', executable='mesh_observer', name='mesh_observer'))
     nodes.append(Node(package='swarm_tasks', executable='target_mover', name='target_mover',
-                      parameters=[{'autostart': '' if lc('target') == 'off' else 'auto'}]))
+                      parameters=[{'autostart': '' if lc('target') == 'off' else 'auto', 'use_sim_time': st}]))
     if info.get('target'):
         nodes.append(Node(package='swarm_tasks', executable='gz_quarry', name='gz_quarry'))
     return nodes
@@ -75,5 +86,6 @@ def generate_launch_description():
         DeclareLaunchArgument('model', default_value=os.path.expanduser('~/swarm_models/visdrone_yolo11s.pt')),
         DeclareLaunchArgument('water_model', default_value=''),
         DeclareLaunchArgument('target', default_value='auto'),     # car already driving (off: no car)
+        DeclareLaunchArgument('sim_time', default_value='true'),   # false: wall clock (as before)
         OpaqueFunction(function=_setup),
     ])

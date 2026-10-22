@@ -78,7 +78,7 @@ class DroneBrainNode(Node):
 
     # ------------------------------------------------------------- inputs
     def on_radio(self, m: SwarmPacket):
-        if m.src == self.id:
+        if m.src == self.id or self._now() == 0.0:
             return
         if self.emulate:
             if self.vs is None:
@@ -95,6 +95,8 @@ class DroneBrainNode(Node):
         self.brain.on_packet(pkt, self._now())
 
     def on_vehicle(self, m: VehicleState):
+        if self._now() == 0.0:          # on Gazebo's clock and it hasn't started yet
+            return
         self.vs = m
         if not m.connected:
             return
@@ -102,6 +104,8 @@ class DroneBrainNode(Node):
                                        m.armed, m.fsm_state, m.latch, m.wind_speed))
 
     def on_task_request(self, m: TaskRequest):
+        if self._now() == 0.0:          # on Gazebo's clock and it hasn't started yet
+            return
         x, y = self.origin.to_enu(m.lat, m.lon)
         params = {}
         desc = m.description or ''
@@ -129,6 +133,8 @@ class DroneBrainNode(Node):
         self.get_logger().info(f'{self.label}: operator {m.task_id} -> {res}')
 
     def on_detections(self, m: DetectionArray):
+        if self._now() == 0.0:          # on Gazebo's clock and it hasn't started yet
+            return
         vs = self.vs
         if vs is None or vs.alt < 3.0:
             return

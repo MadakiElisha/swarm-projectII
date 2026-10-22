@@ -112,9 +112,13 @@ class TargetMover(Node):
             b = math.radians(float(self.get_parameter('bearing').value))
             d = speed * duration
             path = [(x0, y0), (x0 + d * math.sin(b), y0 + d * math.cos(b))]
-        t0 = time.time()
-        while not self.stop_flag.is_set() and time.time() - t0 < duration:
-            s = speed * (time.time() - t0)
+        # the ROS clock: the wall clock, or Gazebo's in Gazebo mode (the car keeps pace with the drones)
+        clk = lambda: self.get_clock().now().nanoseconds * 1e-9      # noqa: E731
+        while clk() == 0.0 and not self.stop_flag.is_set():          # sim time not started yet
+            time.sleep(0.2)
+        t0 = clk()
+        while not self.stop_flag.is_set() and clk() - t0 < duration:
+            s = speed * (clk() - t0)
             (x, y), hdg = along(path, s)
             lat, lon = self.origin.to_latlon(x, y)
             m = TargetTrack()
