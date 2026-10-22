@@ -96,7 +96,7 @@ python3 -m pytest -q tests                     # full core test suite
 | `ros-jazzy-rosbridge-suite` | only for the web GCS |
 
 ```bash
-cd ros2_ws && colcon build && source install/setup.bash && cd ..
+cd ros2_ws && python3 -m colcon build && source install/setup.bash && cd ..   # from your venv, if you use one
 ros2 launch swarm_bringup swarm_sim.launch.py loss:=0.1      # 5 drones, 10% emulated loss
 python3 scripts/ros_acceptance.py                            # drive it like an operator: 6 checks
 ```

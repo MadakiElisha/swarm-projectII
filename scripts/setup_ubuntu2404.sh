@@ -121,7 +121,9 @@ if has build; then
   say "Build the swarm workspace"
   # shellcheck disable=SC1091
   set +u; source /opt/ros/jazzy/setup.bash; [ -d "$VENV" ] && . "$VENV/bin/activate"; set -u
-  cd "$ROOT/ros2_ws" && colcon build --symlink-install
+  # build with the venv's python (python3 -m colcon), so the nodes' scripts run with the
+  # venv and see pymavlink / torch / ultralytics, not bare /usr/bin/python3
+  cd "$ROOT/ros2_ws" && python3 -m colcon build
   cd "$ROOT/ros2_ws/src/swarm_common" && python3 -m pytest -q tests -x -k "not scenarios"
 fi
 

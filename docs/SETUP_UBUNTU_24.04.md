@@ -209,6 +209,7 @@ python perception/visdrone.py install --weights runs/visdrone/yolo11s/weights/be
 | `CUDA error: no kernel image is available` | PyTorch built without sm_120: reinstall with the cu128 (or newer) index |
 | GCS shows "OFFLINE" | rosbridge not running, or wrong URL in ⚙ |
 | `numpy.dtype size changed` / "compiled using NumPy 1.x cannot be run in NumPy 2" | a NumPy 2 got into the venv and Ubuntu's scipy/ROS modules need 1.x: `pip install -c scripts/venv-constraints.txt "numpy<2" "opencv-python<4.12"` |
+| `ModuleNotFoundError: No module named 'pymavlink'` (or cv2 / ultralytics) from `vehicle_manager` / `perception_node` | the workspace was built with the system Python. Rebuild from the venv: `source ~/swarm_venv/bin/activate && cd ros2_ws && rm -rf build install log && python3 -m colcon build && source install/setup.bash` |
 | `make_area.py` times out | Overpass is busy; retry, or `OVERPASS_URL=https://overpass.kumi.systems/api/interpreter` |
 
 ## 9. What is real and what is still simulated here
