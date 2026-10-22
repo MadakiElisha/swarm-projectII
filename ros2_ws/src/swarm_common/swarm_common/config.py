@@ -52,6 +52,7 @@ class FormationCfg:
     on_station_band_m: float = 60.0
     hold_s: float = 180.0
     lead_time_s: float = 6.0
+    intercept_radius_m: float = 80.0   # tight ring; slot 0 shadows the target overhead (camera on it)
 
 
 @dataclass
@@ -176,6 +177,16 @@ def find_fleet_file(path: Optional[str] = None) -> str:
         if c and os.path.isfile(c):
             return os.path.abspath(c)
     raise FileNotFoundError("fleet.yaml not found (set $SWARM_FLEET)")
+
+
+def reference_fleet_file() -> str:
+    """The repo's own fleet.yaml (what the simulator scenarios are written for), ignoring $SWARM_FLEET."""
+    saved = os.environ.pop("SWARM_FLEET", None)
+    try:
+        return find_fleet_file(None)
+    finally:
+        if saved is not None:
+            os.environ["SWARM_FLEET"] = saved
 
 
 def load_fleet(path: Optional[str] = None) -> Fleet:

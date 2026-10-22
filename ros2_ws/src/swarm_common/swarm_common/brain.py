@@ -212,7 +212,8 @@ class DroneBrain:
             if self.id not in avail and self._available_self(now):
                 avail.append(self.id)
             params.setdefault("n_slots", max(1, min(self.cfg.formation.max_slots, len(avail))))
-            params.setdefault("radius", self.cfg.formation.ring_radius_m)
+            params.setdefault("radius", self.cfg.formation.intercept_radius_m if kind == INTERCEPT
+                              else self.cfg.formation.ring_radius_m)
             params.setdefault("hold_s", self.cfg.formation.hold_s)
             # hard upper bound in case the ring can never fully form
             params.setdefault("expires_at", now + 600.0 + self.cfg.formation.hold_s)
@@ -415,8 +416,13 @@ class DroneBrain:
             band = self.cfg.formation.on_station_band_m
             k = max(0.0, min(1.0, (5 * band - d_slot) / (4 * band)))
             tvel = (k * (-w * (ty - cy) + vx), k * (w * (tx - cx) + vy))
-            if it.kind == INTERCEPT and it.slot in (0, 1) and (vx or vy):
-                lt = self.cfg.formation.lead_time_s           # cutters lead the quarry
+            if it.kind == INTERCEPT and it.slot == 0 and it.n_slots > 1:
+                # the shadow flies over the target (slightly ahead) so its camera keeps it in view;
+                # the rest of the ring is fed by its sightings through the shared track
+                tx, ty = cx + vx * 1.5, cy + vy * 1.5
+                tvel = (vx, vy)
+            elif it.kind == INTERCEPT and it.slot == 1 and (vx or vy):
+                lt = self.cfg.formation.lead_time_s           # the cutter leads the quarry
                 tx, ty = tx + vx * lt, ty + vy * lt
             on = math.hypot(tx - pos[0], ty - pos[1]) <= self.cfg.formation.on_station_band_m
             self.phase = "ON_STATION" if on else "ENROUTE"

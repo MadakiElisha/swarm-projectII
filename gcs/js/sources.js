@@ -132,6 +132,9 @@ SW.LiveSource.prototype.attach = function (store, onStatus) {
     var p = SW.geo.toEnu(m.lat, m.lon);
     store.quarry = { t: self.now(), x: p[0], y: p[1], vx: m.vel_e, vy: m.vel_n };
   }, 500);
+  topic('/swarm/sim/scene', 'std_msgs/msg/String', function (m) {      // simulation only: the world
+    try { store.world = JSON.parse(m.data); store.worldV = (store.worldV || 0) + 1; } catch (e) { /* ignore */ }
+  }, 2000);
   this.reqTopic = topic('/swarm/task_requests', 'swarm_interfaces/msg/TaskRequest');
   this.cmdTopic = topic('/swarm/commands', 'swarm_interfaces/msg/DroneCommand');
 };

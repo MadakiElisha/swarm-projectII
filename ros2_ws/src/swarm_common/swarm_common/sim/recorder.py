@@ -187,6 +187,10 @@ class Recorder:
             "cfg": fleet_json(f)["swarm"],
             "area": area_for_gcs(getattr(f, "area", None)),
             "victims": [[v.x, v.y] for v in self.sim.victims],
+            "world": {"people": [[v.x, v.y] for v in self.sim.victims],
+                      "cars": [list(c) for c in getattr(self.sim, "decoys", [])],
+                      "flood": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+                                for (x0, y0, x1, y1) in getattr(self.sim, "flood_zones", [])]},
             "duration": round(self.sim.t, 1),
             "fsm_states": FSM_STATES,
         }

@@ -64,6 +64,25 @@ def project_bbox(u: float, v: float, x: float, y: float, alt_agl: float,
     return x + rw[0] * t, y + rw[1] * t
 
 
+def world_to_image(gx: float, gy: float, x: float, y: float, alt_agl: float,
+                   roll: float, pitch: float, yaw_enu: float, cfg: PerceptionCfg,
+                   gz: float = 0.0) -> Optional[Tuple[float, float]]:
+    """Inverse of project_bbox: where a ground point appears in the image (u, v in [0, 1]),
+    or None if it is behind the camera. Used by the simulated camera."""
+    rw = [gx - x, gy - y, gz - alt_agl]
+    R = _rot_zyx(roll, pitch, yaw_enu)
+    rb = [sum(R[r][c] * rw[r] for r in range(3)) for c in range(3)]        # R^T rw
+    gp = math.radians(-cfg.gimbal_pitch_deg)
+    cg, sg = math.cos(gp), math.sin(gp)
+    rc = [cg * rb[0] - sg * rb[2], rb[1], sg * rb[0] + cg * rb[2]]          # undo the gimbal
+    if rc[0] <= 1e-6:
+        return None
+    ax, ay = -rc[1] / rc[0], -rc[2] / rc[0]
+    u = (ax / math.tan(math.radians(cfg.hfov_deg) / 2) + 1) / 2
+    v = (ay / math.tan(math.radians(cfg.vfov_deg) / 2) + 1) / 2
+    return u, v
+
+
 @dataclass
 class Observation:
     oid: str            # "<observer>-<seq>", globally unique

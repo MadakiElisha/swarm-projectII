@@ -31,6 +31,9 @@ class PerceptionNode(Node):
         self.declare_parameter('classes', ['person', 'pedestrian', 'people', 'car', 'van', 'truck', 'bus',
                                            'motor', 'motorcycle'])
         self.declare_parameter('drone_label', 'D1')
+        # simulation: ONE process (one model on the GPU) serving several drones' cameras.
+        # On hardware every drone runs its own node with just drone_label.
+        self.declare_parameter('drone_labels', [''])
         self.declare_parameter('sliced', False)
         self.declare_parameter('slice_px', 640)
         self.declare_parameter('imgsz', 1024)
@@ -62,14 +65,17 @@ class PerceptionNode(Node):
         self.water_seg = None
         if self.water_mode and self.water_mode != 'hsv':
             self.water_seg = YOLO(self.water_mode)
-        self._last_water = 0.0
-        self.topic = f'/swarm/{self.label}/camera/compressed'
-        self.pub = self.create_publisher(DetectionArray, f'/swarm/{self.label}/detections', 10)
-        self.create_subscription(CompressedImage, self.topic, self.on_image, 10)
-        self.get_logger().info(
-            f'Perception[{self.label}] ready (model={model_path}, listening {self.topic})')
+        labels = [x for x in self.get_parameter('drone_labels').value if x] or [self.label]
+        self._last_water = {lab: 0.0 for lab in labels}
+        self.pubs = {}
+        for lab in labels:
+            self.pubs[lab] = self.create_publisher(DetectionArray, f'/swarm/{lab}/detections', 10)
+            self.create_subscription(CompressedImage, f'/swarm/{lab}/camera/compressed',
+                                     lambda m, lab=lab: self.on_image(m, lab), 2)
+        self.get_logger().info(f'Perception ready for {", ".join(labels)} (model={model_path})')
 
-    def on_image(self, msg: CompressedImage):
+    def on_image(self, msg: CompressedImage, label: str = ''):
+        label = label or self.label
         frame = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
             self.get_logger().warning('Received undecodable image - skipping')
@@ -99,7 +105,7 @@ class PerceptionNode(Node):
         kept = filter_detections(raw, self.min_conf, self.classes)
         out = DetectionArray()
         out.header.stamp = self.get_clock().now().to_msg()
-        out.header.frame_id = self.label
+        out.header.frame_id = label
         for d in kept:
             x1, y1, x2, y2 = d["bbox"]
             det = Detection()
@@ -108,23 +114,23 @@ class PerceptionNode(Node):
             det.bbox_x, det.bbox_y = x1 / w, y1 / h
             det.bbox_w, det.bbox_h = (x2 - x1) / w, (y2 - y1) / h
             out.detections.append(det)
-        out.detections.extend(self._water(frame))
+        out.detections.extend(self._water(frame, label))
         out.count = len(out.detections)
 
-        self.pub.publish(out)
+        self.pubs[label].publish(out)
         if out.count:
-            self.get_logger().info(f'[{self.label}] {out.count} detection(s): '
+            self.get_logger().info(f'[{label}] {out.count} detection(s): '
                                    f'{sorted({d.class_name for d in out.detections})}',
                                    throttle_duration_sec=2.0)
 
-    def _water(self, frame):
+    def _water(self, frame, label):
         """Water cells in this frame as "water" detections (flood recon), at water_hz."""
         if not self.water_mode:
             return []
         now = self.get_clock().now().nanoseconds * 1e-9
-        if now - self._last_water < 1.0 / max(0.1, float(self.get_parameter('water_hz').value)):
+        if now - self._last_water.get(label, 0.0) < 1.0 / max(0.1, float(self.get_parameter('water_hz').value)):
             return []
-        self._last_water = now
+        self._last_water[label] = now
         if self.water_seg is None:                      # colour baseline
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv, np.array(WATER_HSV_LO, np.uint8), np.array(WATER_HSV_HI, np.uint8)) > 0

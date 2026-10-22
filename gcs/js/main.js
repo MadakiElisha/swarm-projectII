@@ -18,10 +18,13 @@ var SW = window.SW || (window.SW = {});
     SW.geo.setOrigin(fleet.origin[0], fleet.origin[1]);
     var store = SW.store = new SW.Store(fleet);
     source.attach(store, function () {});
-    var hero = parseFloat(SW.settings.get('heroScale') || '6') || 6;
+    var hero = parseFloat(SW.settings.get('droneScale') || '1') || 1;
     var scene = SW.scene = new SW.Scene('globe', store, { heroScale: hero, modelUri: SW.MODEL_URI || 'assets/drone.glb' });
     var ov = SW.overlays = new SW.Overlays(scene, store);
-    if (source.kind === 'replay') ov.addTruth(source.meta.victims);
+    if (source.kind === 'replay') {
+      var w = source.meta.world || { people: source.meta.victims || [], cars: [], flood: [] };
+      store.world = w; store.worldV = 1;
+    }
     var ui = SW.ui = new SW.UI(store, scene, ov, source);
     if (!SW.settings.get('ionToken') && !window.SW_ION_TOKEN && !SW.settings.get('tokenHint')) {
       SW.settings.set('tokenHint', '1');

@@ -31,31 +31,34 @@ def _setup(context):
     info_path = os.environ.get('SWARM_GZ_INFO', '')
     info = json.load(open(info_path)) if info_path and os.path.isfile(info_path) else {}
     cams = bool(info.get('camera'))
-    want_perception = lc('perception').lower() == 'true' and cams
+    cam_labels = info.get('camera_labels') or ([d.label for d in fleet.drones] if cams else [])
+    want_perception = lc('perception').lower() == 'true' and bool(cam_labels)
     nodes = []
     for d in fleet.drones:
-        # no camera -> let brains "see" the scripted target directly; with cameras they must detect it
-        nodes += drone_nodes(d.id, 'mavlink', lc('fleet_file'), '', True, float(lc('loss')),
-                             sim_target=not want_perception)
-    if cams:
-        topics = [f'/swarm/{d.label}/camera/image@sensor_msgs/msg/Image[gz.msgs.Image' for d in fleet.drones]
+        # every drone DETECTS the target (camera+YOLO, or the simulated camera) - nobody is handed it
+        nodes += drone_nodes(d.id, 'mavlink', lc('fleet_file'), '', True, float(lc('loss')), sim_target=False)
+    if cam_labels:
+        topics = [f'/swarm/{lab}/camera/image@sensor_msgs/msg/Image[gz.msgs.Image' for lab in cam_labels]
         nodes.append(Node(package='ros_gz_bridge', executable='parameter_bridge', name='gz_camera_bridge',
                           arguments=topics, output='log'))
-        for d in fleet.drones:
+        for lab in cam_labels:
             nodes.append(Node(package='swarm_perception', executable='camera_compressor',
-                              name=f'camera_{d.label.lower()}',
-                              parameters=[{'drone_label': d.label, 'max_hz': 3.0}]))
-            if want_perception:
-                nodes.append(Node(package='swarm_perception', executable='perception_node',
-                                  name=f'perception_{d.label.lower()}',
-                                  parameters=[{'drone_label': d.label, 'model_path': lc('model'),
-                                               'min_confidence': 0.35,
-                                               # flooded world: map water (colour baseline unless
-                                               # a segmentation model is given)
-                                               'water_model': lc('water_model') or
-                                               ('hsv' if info.get('flood_m') else ''),
-                                               'classes': ['person', 'pedestrian', 'people', 'car', 'van',
-                                                           'truck', 'bus']}]))
+                              name=f'camera_{lab.lower()}', parameters=[{'drone_label': lab, 'max_hz': 3.0}]))
+        if want_perception:
+            # ONE detector process (one model on the GPU) for all rendered cameras
+            nodes.append(Node(package='swarm_perception', executable='perception_node', name='perception',
+                              output='screen',
+                              parameters=[{'drone_label': cam_labels[0], 'drone_labels': cam_labels,
+                                           'model_path': lc('model'), 'min_confidence': 0.35,
+                                           'water_model': lc('water_model') or ('hsv' if info.get('flood_m') else ''),
+                                           'classes': ['person', 'pedestrian', 'people', 'car', 'van',
+                                                       'truck', 'bus', 'motor']}]))
+    # drones without a rendered camera (or all, with perception:=false) see through simulated cameras
+    sim_cams = [d.label for d in fleet.drones if not want_perception or d.label not in cam_labels]
+    if sim_cams:
+        nodes.append(Node(package='swarm_tasks', executable='sim_world', name='sim_world', output='screen',
+                          parameters=[{'fleet_file': lc('fleet_file'), 'flood': bool(info.get('flood_m')),
+                                       'only_labels': sim_cams}]))
     nodes.append(Node(package='swarm_mesh', executable='mesh_observer', name='mesh_observer'))
     nodes.append(Node(package='swarm_tasks', executable='target_mover', name='target_mover'))
     if info.get('target'):

@@ -6,9 +6,11 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List
 
-from ..config import load_fleet, synthetic_fleet, SwarmCfg
+from ..config import load_fleet, reference_fleet_file, synthetic_fleet, SwarmCfg
 from ..tasks import DONE, MERGED
 from .core import NetCfg, Quarry, SwarmSim, Victim
+
+REF = reference_fleet_file()     # scenarios are written for the repo fleet, whatever $SWARM_FLEET says
 
 
 @dataclass
@@ -49,7 +51,7 @@ def _all_agree(sim: SwarmSim, task_id: str, status: str) -> bool:
 # --------------------------------------------------------------------------
 def single_dispatch(seed=1, loss=0.0) -> ScenarioResult:
     """Operator reaches ONE drone; gossip spreads the task; nearest feasible drone flies it."""
-    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim = SwarmSim(load_fleet(REF), seed=seed, net=NetCfg(loss=loss))
     sim.at(2, lambda s: s.operator_task("T1", 1500, 800, to={1}))
     sim.run(220)
     r = ScenarioResult("single_dispatch", sim)
@@ -64,7 +66,7 @@ def single_dispatch(seed=1, loss=0.0) -> ScenarioResult:
 
 def perimeter(seed=2, loss=0.1) -> ScenarioResult:
     """SWARM converge: 5 slots allocated by consensus, ring forms, holds, releases."""
-    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim = SwarmSim(load_fleet(REF), seed=seed, net=NetCfg(loss=loss))
     sim.at(2, lambda s: s.operator_task("SWARM-1", 1200, 1300, to={1}))
     sim.run(650)
     r = ScenarioResult("perimeter", sim)
@@ -79,7 +81,7 @@ def perimeter(seed=2, loss=0.1) -> ScenarioResult:
 
 def intercept(seed=3, loss=0.1) -> ScenarioResult:
     """INTERCEPT: ring centre follows a FUSED track built from every drone's sightings."""
-    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim = SwarmSim(load_fleet(REF), seed=seed, net=NetCfg(loss=loss))
     sim.quarry = Quarry(1000, 900, 3.0, 1.5, start=0.0, stop=400.0)
     sim.at(2, lambda s: s.operator_task("INTERCEPT-1", 1000, 900, to={2}))
     errs = []
@@ -104,7 +106,7 @@ def intercept(seed=3, loss=0.1) -> ScenarioResult:
 
 def search_and_rescue(seed=4, loss=0.15) -> ScenarioResult:
     """SEARCH an area: decentralized coverage -> fused sightings -> HITL -> rescue."""
-    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim = SwarmSim(load_fleet(REF), seed=seed, net=NetCfg(loss=loss))
     sim.auto_confirm = True                     # simulated operator clicks "confirm"
     sim.victims = [Victim(900, 1300), Victim(1500, 700), Victim(500, 1500)]
     area = [300.0, 500.0, 1700.0, 1600.0]      # 1.4 km x 1.1 km
@@ -129,7 +131,7 @@ def search_and_rescue(seed=4, loss=0.15) -> ScenarioResult:
 
 def battery_handover(seed=5) -> ScenarioResult:
     """Holder's battery drains faster than modelled -> it relinquishes -> another drone takes over."""
-    sim = SwarmSim(load_fleet(), seed=seed)
+    sim = SwarmSim(load_fleet(REF), seed=seed)
     sim.at(2, lambda s: s.operator_task("T9", 1300, 1250, params={"hold_s": 900.0}, to={1}))
     sim.run(30)
     first = sim.holders().get("T9", [None])[0]
@@ -182,7 +184,7 @@ def partition_heal(seed=7) -> ScenarioResult:
     without communication. A second task, long enough to still be running at
     heal time, must end with exactly one executor once CBBA reconciles.
     """
-    sim = SwarmSim(load_fleet(), seed=seed)
+    sim = SwarmSim(load_fleet(REF), seed=seed)
     sim.partition(0, 60, {1, 2})
     for side in ({1}, {5}):
         sim.at(5, lambda s, side=side: s.operator_task(
@@ -233,7 +235,7 @@ def dense_crossing(seed=8, n=10) -> ScenarioResult:
 
 def operator_rtl_sticks(seed=9) -> ScenarioResult:
     """Regression for the old bug: an operator RTL during a ring mission must stick."""
-    sim = SwarmSim(load_fleet(), seed=seed)
+    sim = SwarmSim(load_fleet(REF), seed=seed)
     sim.at(2, lambda s: s.operator_task("SWARM-2", 1200, 1300, to={1}))
     sim.run(120)
     target = sim.holders()
@@ -257,7 +259,7 @@ def miscalibrated_batteries(seed=10) -> ScenarioResult:
     can no longer afford, and get home on their own decision - never via
     the vehicle's critical-battery failsafe.
     """
-    sim = SwarmSim(load_fleet(), seed=seed)
+    sim = SwarmSim(load_fleet(REF), seed=seed)
     for v in sim.veh.values():
         v.drain_factor = 4.0
     sim.at(2, lambda s: s.operator_task("SWARM-9", 1200, 1300, to={1}))
@@ -315,7 +317,7 @@ def intercept_with_decoys(seed=12, loss=0.1) -> ScenarioResult:
     """Pursuit with a realistic detector: the target is just "vehicle" (no velocity),
     and 8 parked cars nearby are also "vehicle". The gated tracker must follow
     the moving one."""
-    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim = SwarmSim(load_fleet(REF), seed=seed, net=NetCfg(loss=loss))
     sim.realistic_detector = True
     sim.quarry = Quarry(1000, 900, 3.0, 1.5, start=0.0, stop=400.0)
     sim.decoys = [(1000 + 60 * k, 840 + 25 * (k % 3)) for k in range(8)]   # along the target's road
@@ -341,7 +343,7 @@ def intercept_with_decoys(seed=12, loss=0.1) -> ScenarioResult:
 
 def flood_recon(seed=21, loss=0.15) -> ScenarioResult:
     """FLOOD recon: survey a district, map what is under water, find stranded people."""
-    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim = SwarmSim(load_fleet(REF), seed=seed, net=NetCfg(loss=loss))
     sim.auto_confirm = True
     zones = [(500.0, 600.0, 1100.0, 1000.0), (1200.0, 1200.0, 1600.0, 1500.0)]
     sim.flood_zones = zones
@@ -370,7 +372,7 @@ def patrol_intruder(seed=22, loss=0.1) -> ScenarioResult:
     """Perimeter surveillance: a standing patrol ring; parked cars and a guard inside are
     ignored; a car that drives in is detected and intercepted automatically; the patrol
     keeps going."""
-    sim = SwarmSim(load_fleet(), seed=seed, net=NetCfg(loss=loss))
+    sim = SwarmSim(load_fleet(REF), seed=seed, net=NetCfg(loss=loss))
     sim.realistic_detector = True
     sim.decoys = [(1150, 1250), (1260, 1330), (1190, 1380)]           # parked inside the perimeter
     sim.quarry = Quarry(1700, 1300, -3.0, 0.4, start=260.0, stop=520.0)   # drives in from the east

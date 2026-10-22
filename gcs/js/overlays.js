@@ -267,7 +267,7 @@ SW.Overlays.prototype.updateCoverage = function () {
           coordinates: Cesium.Rectangle.fromDegrees(a[1], a[0], b[1], b[0]),
           material: new Cesium.ImageMaterialProperty({ image: new Cesium.CallbackProperty(function () { return E.canvas; }, false),
                                                        transparent: true }),
-          height: c.water ? 0.6 : 0.3,
+          height: new Cesium.CallbackProperty(function () { return self.scene.groundH + (c.water ? 0.6 : 0.4); }, false),
           show: new Cesium.CallbackProperty(function () {
             var tk = s.tasks[c.task || id];
             return self.scene.layers.coverage && (!tk || tk.st === 'OPEN' || tk.st === 'DONE');
@@ -307,7 +307,7 @@ SW.Overlays.prototype.updateSensors = function (t) {
         ellipse: { semiMajorAxis: new Cesium.CallbackProperty(function () { return F.r; }, false),
                    semiMinorAxis: new Cesium.CallbackProperty(function () { return F.r; }, false),
                    material: C(SW.colorOf(id), 0.06), outline: true, outlineColor: C(SW.colorOf(id), 0.7),
-                   height: 0.4 },
+                   height: new Cesium.CallbackProperty(function () { return self.scene.groundH + 0.4; }, false) },
         show: new Cesium.CallbackProperty(function () { return self.scene.layers.sensors && F.r > 3; }, false),
       });
     }
@@ -355,9 +355,62 @@ SW.Overlays.prototype._frustum = function () {
     arcType: Cesium.ArcType.NONE } });
 };
 
+/* ------------------------------------------- the world the drones look at */
+// people, parked cars and flood water (simulation ground truth): drawn as small 3D
+// objects at true size, plus a dot that stays visible from afar
+SW.Overlays.prototype.setWorld = function (w) {
+  var self = this, v = this.v;
+  if (!w || this._worldKey === JSON.stringify([w.people, w.cars, w.flood])) return;
+  this._worldKey = JSON.stringify([w.people, w.cars, w.flood]);
+  (this.worldEnts || []).forEach(function (e) { v.entities.remove(e); });
+  var ents = this.worldEnts = [];
+  var show = new Cesium.CallbackProperty(function () { return self.scene.layers.truth; }, false);
+  var ground = function (x, y, dz) {
+    var ll = SW.geo.toLatLon(x, y);
+    return new Cesium.CallbackProperty(function () { return self.scene.pos(ll[0], ll[1], dz); }, true);
+  };
+  (w.flood || []).forEach(function (poly) {
+    ents.push(v.entities.add({ polygon: {
+      hierarchy: poly.map(function (p) { var ll = SW.geo.toLatLon(p[0], p[1]); return Cesium.Cartesian3.fromDegrees(ll[1], ll[0]); }),
+      material: C('#1e5a8a', 0.55), show: show,
+      height: new Cesium.CallbackProperty(function () { return self.scene.groundH + 0.3; }, false) } }));
+  });
+  (w.people || []).forEach(function (p, i) {
+    var rnd = Math.sin(i * 12.9898) * 43758.5453, shirt = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#e5e7eb'][Math.abs(Math.floor(rnd)) % 5];
+    ents.push(v.entities.add({ position: ground(p[0], p[1], 0.85),
+      cylinder: { length: 1.7, topRadius: 0.22, bottomRadius: 0.28, material: C(shirt), show: show },
+      point: { pixelSize: 6, color: C('#fff', 0.9), outlineColor: C(BAD), outlineWidth: 2, show: show,
+               distanceDisplayCondition: new Cesium.DistanceDisplayCondition(250, 1e7) } }));
+  });
+  (w.cars || []).forEach(function (c, i) {
+    var yaw = (Math.sin(i * 7.31) * 3.14159);
+    ents.push(v.entities.add({ position: ground(c[0], c[1], 0.75),
+      orientation: Cesium.Transforms.headingPitchRollQuaternion(self.scene.pos(SW.geo.toLatLon(c[0], c[1])[0],
+        SW.geo.toLatLon(c[0], c[1])[1], 0), new Cesium.HeadingPitchRoll(yaw, 0, 0)),
+      box: { dimensions: new Cesium.Cartesian3(4.4, 1.8, 1.5), show: show,
+             material: C(['#d1d5db', '#1f2937', '#b91c1c', '#1d4ed8', '#f8fafc'][i % 5]) } }));
+  });
+};
+
 /* --------------------------------------------------- moving target */
 SW.Overlays.prototype._target = function () {
   var self = this, s = this.store;
+  var carPos = function () {
+    var q = s.quarry;
+    if (!q || s.now - q.t > 5) return undefined;
+    var dt = s.now - q.t, ll = SW.geo.toLatLon(q.x + q.vx * dt, q.y + q.vy * dt);
+    return self.scene.pos(ll[0], ll[1], 0.75);
+  };
+  this.v.entities.add({     // the car itself, true size, pointing where it drives
+    position: new Cesium.CallbackProperty(carPos, false),
+    orientation: new Cesium.CallbackProperty(function () {
+      var q = s.quarry, p = carPos();
+      if (!p || !q) return Cesium.Quaternion.IDENTITY;
+      return Cesium.Transforms.headingPitchRollQuaternion(p, new Cesium.HeadingPitchRoll(Math.PI / 2 - Math.atan2(q.vy, q.vx), 0, 0));
+    }, false),
+    box: { dimensions: new Cesium.Cartesian3(4.6, 1.9, 1.5), material: C('#facc15'),
+           show: new Cesium.CallbackProperty(function () { return self.scene.layers.truth && !!carPos(); }, false) },
+  });
   var truth = function () {
     var q = s.quarry;
     if (!q || s.now - q.t > 5) return null;
@@ -383,7 +436,8 @@ SW.Overlays.prototype._target = function () {
     }, false),
     ellipse: { semiMajorAxis: new Cesium.CallbackProperty(function () { var f = fused(); return f ? 3 * f.sigma : 1; }, false),
                semiMinorAxis: new Cesium.CallbackProperty(function () { var f = fused(); return f ? 3 * f.sigma : 1; }, false),
-               material: C('#fb923c', 0.25), outline: true, outlineColor: C('#fb923c'), height: 0.6 },
+               material: C('#fb923c', 0.25), outline: true, outlineColor: C('#fb923c'),
+               height: new Cesium.CallbackProperty(function () { return self.scene.groundH + 0.6; }, false) },
     show: new Cesium.CallbackProperty(function () { return self.scene.layers.target && !!fused(); }, false),
   });
   this.v.entities.add({     // 30 s prediction from the fused constant-velocity track
@@ -412,6 +466,10 @@ SW.Overlays.prototype.addTruth = function (victims) {
 };
 
 SW.Overlays.prototype.update = function (t) {
+  if (this.store.world && this._worldV !== this.store.worldV) {
+    this._worldV = this.store.worldV;
+    this.setWorld(this.store.world);
+  }
   this.updateLinks(t);
   this.updatePulses(t);
   this.updateTasks(t);

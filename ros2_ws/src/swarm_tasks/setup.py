@@ -14,12 +14,13 @@ setup(
     zip_safe=True,
     maintainer='Madaki Elisha',
     maintainer_email='stefannelisha@gmail.com',
-    description='Simulation props (scripted moving target)',
+    description='Simulation props: moving target, simulated cameras (sim_world), Gazebo quarry',
     license='MIT',
     entry_points={
         'console_scripts': [
             'gz_quarry = swarm_tasks.gz_quarry:main',
             'target_mover = swarm_tasks.target_mover:main',
+            'sim_world = swarm_tasks.sim_world:main',
         ],
     },
 )

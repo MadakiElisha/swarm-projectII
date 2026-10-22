@@ -324,11 +324,31 @@ def build(args):
     camera = None if args.no_camera else {"w": args.cam_w, "h": args.cam_h, "fps": args.cam_fps,
                                           "hfov": round(math.radians(fleet.swarm.perception.hfov_deg), 4)}
     drones, spawns = "", []
-    for d in fleet.drones:
-        name, port = _drone_model(models, os.path.join(apgz, "models"), d.id, d.label, camera)
+    cam_n = len(fleet.drones) if args.camera_drones <= 0 else args.camera_drones
+    for k, d in enumerate(fleet.drones):
+        # rendering cameras is the expensive part: only the first --camera-drones get one
+        # (the others use simulated cameras); --camera-drones 0 = all
+        name, port = _drone_model(models, os.path.join(apgz, "models"), d.id, d.label,
+                                  camera if k < cam_n else None)
         x, y = o.to_enu(d.home_lat, d.home_lon)
         spawns.append({"id": d.id, "label": d.label, "model": name, "x": round(x, 2), "y": round(y, 2),
                        "fdm_port": port})
+        # helipad under each drone: dark square, yellow border, white "H" (visual only)
+        drones += f"""
+    <model name="pad_{d.label}"><static>true</static><pose>{x:.2f} {y:.2f} 0.02 0 0 0</pose><link name="l">
+      <visual name="slab"><geometry><box><size>7 7 0.04</size></box></geometry>
+        <material><ambient>0.13 0.14 0.15 1</ambient><diffuse>0.23 0.24 0.26 1</diffuse></material></visual>
+      <visual name="rim"><pose>0 0 0.021 0 0 0</pose><geometry><box><size>6.6 6.6 0.002</size></box></geometry>
+        <material><ambient>0.6 0.5 0.05 1</ambient><diffuse>0.96 0.77 0.09 1</diffuse></material></visual>
+      <visual name="inner"><pose>0 0 0.022 0 0 0</pose><geometry><box><size>6.0 6.0 0.002</size></box></geometry>
+        <material><ambient>0.13 0.14 0.15 1</ambient><diffuse>0.23 0.24 0.26 1</diffuse></material></visual>
+      <visual name="h1"><pose>-1.1 0 0.024 0 0 0</pose><geometry><box><size>0.45 3.0 0.002</size></box></geometry>
+        <material><ambient>0.8 0.8 0.8 1</ambient><diffuse>0.95 0.95 0.95 1</diffuse></material></visual>
+      <visual name="h2"><pose>1.1 0 0.024 0 0 0</pose><geometry><box><size>0.45 3.0 0.002</size></box></geometry>
+        <material><ambient>0.8 0.8 0.8 1</ambient><diffuse>0.95 0.95 0.95 1</diffuse></material></visual>
+      <visual name="h3"><pose>0 0 0.024 0 0 0</pose><geometry><box><size>2.2 0.45 0.002</size></box></geometry>
+        <material><ambient>0.8 0.8 0.8 1</ambient><diffuse>0.95 0.95 0.95 1</diffuse></material></visual>
+    </link></model>"""
         drones += f"\n    <include><uri>model://{name}</uri><name>{d.label}</name>" \
                   f"<pose degrees='true'>{x:.2f} {y:.2f} 0.195 0 0 90</pose></include>"
 
@@ -395,7 +415,8 @@ def build(args):
         f.write(world)
     info = {"area": area.get("name"), "origin": [o.lat, o.lon], "drones": spawns,
             "survivors": victims, "cars": cars, "target": [qx, qy] if args.target else None,
-            "camera": camera, "flood_m": args.flood}
+            "camera": camera, "camera_labels": [d.label for d in fleet.drones][:cam_n] if camera else [],
+            "flood_m": args.flood}
     with open(os.path.join(out, "world.json"), "w") as f:
         json.dump(info, f, indent=1)
     with open(os.path.join(out, "env.sh"), "w") as f:
@@ -435,6 +456,8 @@ def main():
     ap.add_argument("--no-target", dest="target", action="store_false")
     ap.add_argument("--flood", type=float, default=0.0, help="flood water depth in metres (0 = dry)")
     ap.add_argument("--no-camera", action="store_true", help="physics only (no GPU needed)")
+    ap.add_argument("--camera-drones", type=int, default=2,
+                    help="how many drones get a rendered camera (0 = all); the rest use simulated cameras")
     ap.add_argument("--cam-w", type=int, default=640)
     ap.add_argument("--cam-h", type=int, default=400)
     ap.add_argument("--cam-fps", type=float, default=5.0)

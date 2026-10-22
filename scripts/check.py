@@ -12,7 +12,9 @@ import subprocess
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-AREA = sys.argv[1] if len(sys.argv) > 1 else "eko"
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+AREA = ARGS[0] if ARGS else "eko"
+GAZEBO = "--gazebo" in sys.argv          # the heavy mode needs Gazebo + the plugin + a world
 G, Y, R, X = "\033[32m✓\033[0m", "\033[33m!\033[0m", "\033[31m✗\033[0m", "\033[0m"
 bad = 0
 
@@ -95,15 +97,23 @@ print("\n== ROS 2 / Gazebo / ArduPilot")
 (ok if os.environ.get("ROS_DISTRO") == "jazzy" else fail)(
     f"ROS_DISTRO={os.environ.get('ROS_DISTRO', 'unset')}", "source /opt/ros/jazzy/setup.bash")
 gz = run("gz sim --versions") or run("gz sim --version")
-(ok if gz else fail)(f"gazebo: {gz.splitlines()[0] if gz else 'not found'}", "STEPS=gz scripts/setup_ubuntu2404.sh")
+(ok if gz else (fail if GAZEBO else warn))(f"gazebo: {gz.splitlines()[0] if gz else 'not found'}",
+                                           "STEPS=gz scripts/setup_ubuntu2404.sh")
 ap = os.path.expanduser(os.environ.get("ARDUPILOT_HOME", "~/ardupilot"))
 (ok if os.path.isfile(f"{ap}/build/sitl/bin/arducopter") else fail)(
     f"ArduCopter SITL in {ap}", "STEPS=ardupilot scripts/setup_ubuntu2404.sh")
 apgz = os.path.expanduser(os.environ.get("ARDUPILOT_GAZEBO", "~/ardupilot_gazebo"))
-(ok if glob.glob(f"{apgz}/build/libArduPilotPlugin.so") else fail)(
+(ok if glob.glob(f"{apgz}/build/libArduPilotPlugin.so") else (fail if GAZEBO else warn))(
     f"ardupilot_gazebo plugin in {apgz}", "STEPS=apgz scripts/setup_ubuntu2404.sh")
 (ok if run("ros2 pkg prefix rosbridge_server") else warn)(
     "rosbridge (web GCS live mode)", "sudo apt install ros-jazzy-rosbridge-server")
+
+rmw = os.environ.get("RMW_IMPLEMENTATION", "")
+if "zenoh" in rmw:
+    warn(f"RMW_IMPLEMENTATION={rmw}: nodes can't see each other without a Zenoh router",
+         "export RMW_IMPLEMENTATION=rmw_fastrtps_cpp   (scripts/gz/up.sh does this for you)")
+else:
+    ok(f"ROS 2 middleware: {rmw or 'default (Fast DDS)'}")
 
 print("\n== workspace")
 vm = os.path.join(ROOT, "ros2_ws/install/swarm_vehicle/lib/swarm_vehicle/vehicle_manager")
@@ -132,7 +142,8 @@ if os.path.isfile(world):
     else:
         ok(world)
 else:
-    fail("no Gazebo world", f"python3 scripts/gz/make_world.py --fleet areas/{AREA}/fleet.yaml")
+    (fail if GAZEBO else warn)("no Gazebo world (only needed for --gazebo)",
+                               f"python3 scripts/gz/make_world.py --fleet areas/{AREA}/fleet.yaml")
 tok = os.path.join(ROOT, "gcs/config.local.js")
 if os.path.isfile(tok):
     ok("Cesium ion token (gcs/config.local.js)")
@@ -141,6 +152,6 @@ else:
 if shutil.which("gnome-terminal") is None and shutil.which("tmux") is None:
     warn("neither gnome-terminal nor tmux: scripts/gz/up.sh can't open terminals", "sudo apt install tmux")
 
-print("\n" + ("\033[32mREADY\033[0m  ->  scripts/gz/up.sh " + AREA if not bad else
+print("\n" + ("\033[32mREADY\033[0m  ->  scripts/gz/up.sh " + AREA + (" --gazebo" if GAZEBO else "") if not bad else
               f"\033[31m{bad} problem(s)\033[0m - fix the ✗ lines above, then run this again"))
 sys.exit(1 if bad else 0)

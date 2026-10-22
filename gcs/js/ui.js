@@ -60,16 +60,16 @@ SW.UI.prototype._wire = function () {
   $('btnSettings').onclick = function () {
     $('ionToken').value = SW.settings.get('ionToken') || '';
     $('rosUrl').value = SW.settings.get('rosUrl') || '';
-    $('heroScale').value = SW.settings.get('heroScale') || 6;
+    $('heroScale').value = SW.settings.get('droneScale') || 1;
     $('quality').value = SW.settings.get('quality') || 'auto';
-    $('buildings').value = SW.settings.get('buildings') || 'height';
+    $('buildings').value = SW.settings.get('buildings') || ((SW.settings.get('ionToken') || window.SW_ION_TOKEN) ? 'photo' : 'height');
     $('settings').style.display = 'block';
   };
   $('closeSettings').onclick = function () { $('settings').style.display = 'none'; };
   $('saveSettings').onclick = function () {
     SW.settings.set('ionToken', $('ionToken').value.trim());
     SW.settings.set('rosUrl', $('rosUrl').value.trim());
-    SW.settings.set('heroScale', $('heroScale').value || '6');
+    SW.settings.set('droneScale', $('heroScale').value || '1');
     SW.settings.set('quality', $('quality').value === 'auto' ? '' : $('quality').value);
     SW.settings.set('buildings', $('buildings').value);
     location.reload();

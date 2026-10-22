@@ -9,10 +9,13 @@ SW.colorOf = function (id) { return SW.PALETTE[(id - 1) % SW.PALETTE.length]; };
 SW.Scene = function (container, store, opts) {
   opts = opts || {};
   this.store = store;
-  this.heroScale = opts.heroScale || 6;            // drones drawn larger than life for visibility
+  // drones at TRUE size (~0.8 m survey quad); they stay visible from afar thanks to a
+  // minimum on-screen size plus a coloured beacon. droneScale > 1 exaggerates them.
+  this.heroScale = opts.heroScale || 1;
+  this.modelScale = 1.6 * this.heroScale;
   this.modelUri = opts.modelUri || 'assets/drone.glb';
   this.layers = { links: true, packets: true, consensus: true, avoidance: true, coverage: true,
-                  sensors: true, trails: true, target: true, truth: false, labels: true };
+                  sensors: true, trails: true, target: true, truth: true, labels: true };
   var token = SW.settings.get('ionToken') || window.SW_ION_TOKEN || '';
   if (token) Cesium.Ion.defaultAccessToken = token;
   var imagery = new Cesium.UrlTemplateImageryProvider({
@@ -45,13 +48,19 @@ SW.Scene = function (container, store, opts) {
   v.shadowMap.maximumDistance = 3000;
   v.scene.screenSpaceCameraController.minimumZoomDistance = 15;
   this.groundH = 0;
-  // buildings: the operating area's own OSM footprints (exactly what the drones plan
-  // around - no token needed); with a token also terrain + Cesium OSM Buildings, or
-  // Google Photorealistic 3D Tiles
-  this.buildingStyle = SW.settings.get('buildings') || 'height';     // height | white | photo | off
-  if (token) this._enableTerrain(!!(store.fleet && store.fleet.area));
-  if (store.fleet && store.fleet.area && this.buildingStyle !== 'off' && this.buildingStyle !== 'photo')
-    this._buildCity(store.fleet.area);
+  // ground + buildings. With a Cesium ion token: real terrain and, by default, Google
+  // Photorealistic 3D Tiles (the real city). Without: the area's OSM footprints coloured
+  // by height (exactly what the drones plan around). Everything waits for the ground height.
+  var hasArea = !!(store.fleet && store.fleet.area);
+  this.buildingStyle = SW.settings.get('buildings') || (token ? 'photo' : 'height');   // photo | height | white | off
+  this.token = token;
+  var self0 = this;
+  this.ready = (token ? this._enableTerrain(hasArea) : Promise.resolve(0)).then(function (h) {
+    self0.groundH = h || 0;
+    if (hasArea && (self0.buildingStyle === 'height' || self0.buildingStyle === 'white'))
+      self0._buildCity(store.fleet.area);
+    self0._launchSite();
+  });
   this.entities = {};
   this.trails = {};
   this.follow = null;
@@ -60,7 +69,6 @@ SW.Scene = function (container, store, opts) {
   this._lastT = null;
   var self = this;
   Object.keys(store.drones).forEach(function (k) { self._ensureDrone(store.drones[k]); });
-  this._homePads();
   this._pick();
 };
 
@@ -93,7 +101,7 @@ SW.Scene.prototype._buildCity = function (area) {
         id: 'bldg' + i,
         geometry: new Cesium.PolygonGeometry({
           polygonHierarchy: new Cesium.PolygonHierarchy(ring(b[2])),
-          height: base, extrudedHeight: h,
+          height: self.groundH + base, extrudedHeight: self.groundH + h,
           vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
         }),
         attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(col) },
@@ -112,7 +120,7 @@ SW.Scene.prototype._buildCity = function (area) {
   var water = (area.w || []).map(function (w) {
     return new Cesium.GeometryInstance({
       geometry: new Cesium.PolygonGeometry({ polygonHierarchy: new Cesium.PolygonHierarchy(ring(w)),
-                                             height: 0.2 }),
+                                             height: self.groundH + 0.2 }),
       attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(
         Cesium.Color.fromCssColorString('#1d4ed8').withAlpha(0.35)) },
     });
@@ -122,50 +130,90 @@ SW.Scene.prototype._buildCity = function (area) {
       geometryInstances: water, appearance: new Cesium.PerInstanceColorAppearance({ translucent: true, flat: true }),
     })));
   }
-  this._liftCity();
 };
 
-/* Footprints are built at ellipsoid height 0; lift them onto the sampled terrain. */
-SW.Scene.prototype._liftCity = function () {
-  if (!this.cityPrims || !this.cityPrims.length) return;
-  var o = SW.geo.origin();
-  var up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(Cesium.Cartesian3.fromDegrees(o[1], o[0]), new Cesium.Cartesian3());
-  var m = Cesium.Matrix4.fromTranslation(Cesium.Cartesian3.multiplyByScalar(up, this.groundH, up));
-  this.cityPrims.forEach(function (p) { p.modelMatrix = m; });
-};
-
+/* -> Promise(ground ellipsoid height at the origin). Sets up terrain / 3D tiles. */
 SW.Scene.prototype._enableTerrain = function (haveArea) {
-  var v = this.viewer, self = this, style = this.buildingStyle;
-  try {
-    if (style === 'photo') {                                 // Google Photorealistic 3D Tiles via ion
+  var v = this.viewer, style = this.buildingStyle, o = SW.geo.origin();
+  var ground = Cesium.createWorldTerrainAsync().then(function (tp) {
+    if (style !== 'photo') {
+      v.scene.terrainProvider = tp;
+      v.scene.globe.depthTestAgainstTerrain = true;
+    }
+    return Cesium.sampleTerrainMostDetailed(tp, [Cesium.Cartographic.fromDegrees(o[1], o[0])]);
+  }).then(function (r) { return (r[0] && r[0].height) || 0; })
+    .catch(function (e) { console.warn('terrain unavailable', e); return 0; });
+  if (style === 'photo') {                     // Google Photorealistic 3D Tiles via ion: the real city
+    var site = this._siteCentre();
+    return Cesium.createGooglePhotorealistic3DTileset().then(function (t) {
+      v.scene.primitives.add(t);
       v.scene.globe.show = false;
-      Cesium.createGooglePhotorealistic3DTileset().then(function (t) { v.scene.primitives.add(t); })
-        .catch(function (e) { console.warn('photorealistic tiles unavailable', e); v.scene.globe.show = true; });
-      return;
-    }
-    v.scene.setTerrain(Cesium.Terrain.fromWorldTerrain());
-    v.scene.globe.depthTestAgainstTerrain = true;
-    // the area's own footprints are drawn when present (same data the drones plan with);
-    // otherwise show Cesium OSM Buildings everywhere, styled the same way
-    if (!haveArea && style !== 'off') {
-      Cesium.createOsmBuildingsAsync().then(function (b) {
-        var hexpr = "(${feature['cesium#estimatedHeight']} === undefined ? 10 : Number(${feature['cesium#estimatedHeight']}))";
-        var conds = style === 'white' ? [['true', "color('#f4f4f2')"]] :
-          SW.HEIGHT_RAMP.slice().reverse().map(function (r) { return [hexpr + ' >= ' + r[0], "color('" + r[1] + "')"]; });
-        b.style = new Cesium.Cesium3DTileStyle({ color: { conditions: conds } });
-        v.scene.primitives.add(b);
-      });
-    }
-    var o = SW.geo.origin();
-    Cesium.Terrain && Cesium.sampleTerrainMostDetailed && v.scene.terrainProvider &&
-      setTimeout(function () {
-        Cesium.sampleTerrainMostDetailed(v.scene.terrainProvider,
-          [Cesium.Cartographic.fromDegrees(o[1], o[0])]).then(function (r) {
-          self.groundH = (r[0] && r[0].height) || 0;
-          self._liftCity();
-        }).catch(function () {});
-      }, 3000);
-  } catch (e) { console.warn('terrain unavailable', e); }
+      // the ground in the 3D tiles at the launch site is what pads and drones must sit on
+      return v.scene.sampleHeightMostDetailed([Cesium.Cartographic.fromDegrees(site[1], site[0])]);
+    }).then(function (r) {
+      var h = r && r[0] && r[0].height;
+      return (h === undefined || h === null || !isFinite(h)) ? ground : h;
+    }).catch(function (e) { console.warn('photorealistic tiles unavailable', e); v.scene.globe.show = true; return ground; });
+  } else if (!haveArea && style !== 'off') {   // no OSM area of our own: Cesium OSM Buildings everywhere
+    Cesium.createOsmBuildingsAsync().then(function (b) {
+      var hexpr = "(${feature['cesium#estimatedHeight']} === undefined ? 10 : Number(${feature['cesium#estimatedHeight']}))";
+      var conds = style === 'white' ? [['true', "color('#f4f4f2')"]] :
+        SW.HEIGHT_RAMP.slice().reverse().map(function (r) { return [hexpr + ' >= ' + r[0], "color('" + r[1] + "')"]; });
+      b.style = new Cesium.Cesium3DTileStyle({ color: { conditions: conds } });
+      v.scene.primitives.add(b);
+    }).catch(function (e) { console.warn('OSM buildings unavailable', e); });
+  }
+  return ground;
+};
+
+SW.Scene.prototype._siteCentre = function () {
+  var s = this.store, la = 0, lo = 0, n = 0;
+  Object.keys(s.drones).forEach(function (k) { var h = s.drones[k].home; if (h) { la += h[0]; lo += h[1]; n++; } });
+  return n ? [la / n, lo / n] : SW.geo.origin();
+};
+
+/* Launch site: a concrete apron with one marked helipad per drone (pads draped on
+   terrain / 3D tiles), so the swarm visibly takes off from and lands on its base. */
+SW.padTexture = function (label, css) {
+  var c = document.createElement('canvas'); c.width = c.height = 256;
+  var g = c.getContext('2d');
+  g.fillStyle = '#3b3f45'; g.fillRect(0, 0, 256, 256);
+  g.strokeStyle = '#f5c518'; g.lineWidth = 10; g.strokeRect(8, 8, 240, 240);
+  g.strokeStyle = '#f1f1f1'; g.lineWidth = 9; g.beginPath(); g.arc(128, 128, 92, 0, 2 * Math.PI); g.stroke();
+  g.fillStyle = '#f1f1f1'; g.font = 'bold 120px Inter, Arial, sans-serif'; g.textAlign = 'center';
+  g.textBaseline = 'middle'; g.fillText('H', 128, 132);
+  g.fillStyle = css; g.font = 'bold 34px Inter, Arial, sans-serif'; g.fillText(label, 210, 36);
+  return c;
+};
+
+SW.Scene.prototype._launchSite = function () {
+  var v = this.viewer, self = this, pads = [];
+  Object.keys(this.store.drones).forEach(function (k) {
+    var d = self.store.drones[k];
+    if (d.home) pads.push({ d: d, e: SW.geo.toEnu(d.home[0], d.home[1]) });
+  });
+  if (!pads.length) return;
+  var xs = pads.map(function (p) { return p.e[0]; }), ys = pads.map(function (p) { return p.e[1]; });
+  var x0 = Math.min.apply(null, xs) - 12, x1 = Math.max.apply(null, xs) + 12;
+  var y0 = Math.min.apply(null, ys) - 12, y1 = Math.max.apply(null, ys) + 12;
+  var corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(function (p) {
+    var ll = SW.geo.toLatLon(p[0], p[1]); return Cesium.Cartesian3.fromDegrees(ll[1], ll[0]);
+  });
+  v.entities.add({ polygon: { hierarchy: corners, material: Cesium.Color.fromCssColorString('#8d8f8a'),
+                              height: this.groundH + 0.03 } });
+  var c = SW.geo.toLatLon((x0 + x1) / 2, y1 + 4);
+  this.siteLabel = v.entities.add({ position: Cesium.Cartesian3.fromDegrees(c[1], c[0], this.groundH + 3),
+    label: { text: 'LAUNCH SITE', font: '700 13px Inter, system-ui, sans-serif', fillColor: Cesium.Color.WHITE,
+             outlineColor: Cesium.Color.fromCssColorString('#020617'), outlineWidth: 3,
+             style: Cesium.LabelStyle.FILL_AND_OUTLINE, disableDepthTestDistance: Number.POSITIVE_INFINITY,
+             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 6000) } });
+  pads.forEach(function (p) {
+    var h = 3.5, a = SW.geo.toLatLon(p.e[0] - h, p.e[1] - h), b = SW.geo.toLatLon(p.e[0] + h, p.e[1] + h);
+    v.entities.add({ rectangle: {
+      coordinates: Cesium.Rectangle.fromDegrees(a[1], a[0], b[1], b[0]),
+      material: new Cesium.ImageMaterialProperty({ image: SW.padTexture(p.d.label, SW.colorOf(p.d.id)) }),
+      height: self.groundH + 0.06 } });
+  });
 };
 
 SW.Scene.prototype.pos = function (lat, lon, alt) {
@@ -187,7 +235,7 @@ SW.Scene.prototype._ensureDrone = function (d) {
     position: new Cesium.CallbackProperty(function () { return st.pos; }, false),
     orientation: new Cesium.CallbackProperty(function () { return st.q; }, false),
     model: {
-      uri: this.modelUri, scale: this.heroScale, minimumPixelSize: 34, maximumScale: 400,
+      uri: this.modelUri, scale: this.modelScale, minimumPixelSize: 56, maximumScale: 4000,
       shadows: self.lite ? Cesium.ShadowMode.DISABLED : Cesium.ShadowMode.ENABLED, nodeTransformations: nodes,
       silhouetteColor: color, silhouetteSize: new Cesium.CallbackProperty(function () {
         return self.selected === d.id ? 2.5 : 1.0; }, false),
@@ -205,6 +253,13 @@ SW.Scene.prototype._ensureDrone = function (d) {
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
     },
   });
+  // beacon: a coloured ring that keeps every drone findable from far away
+  v.entities.add({
+    position: new Cesium.CallbackProperty(function () { return st.pos; }, false),
+    billboard: { image: SW.beacon(SW.colorOf(d.id)), scale: 0.5, disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                 distanceDisplayCondition: new Cesium.DistanceDisplayCondition(450, 1e7),
+                 show: new Cesium.CallbackProperty(function () { return !!st.s; }, false) },
+  });
   // drop line + ground ring: makes altitude readable
   v.entities.add({
     polyline: {
@@ -217,7 +272,8 @@ SW.Scene.prototype._ensureDrone = function (d) {
   });
   v.entities.add({
     position: new Cesium.CallbackProperty(function () { return st.s ? self.pos(st.s.lat, st.s.lon, 0.2) : undefined; }, false),
-    ellipse: { semiMajorAxis: 4, semiMinorAxis: 4, material: color.withAlpha(0.35), height: 0.2 },
+    ellipse: { semiMajorAxis: 4, semiMinorAxis: 4, material: color.withAlpha(0.35),
+               height: new Cesium.CallbackProperty(function () { return self.groundH + 0.3; }, false) },
   });
   // trail
   var trail = this.trails[d.id] = [];
@@ -233,17 +289,13 @@ SW.Scene.prototype._ensureDrone = function (d) {
   return this.entities[d.id];
 };
 
-SW.Scene.prototype._homePads = function () {
-  var v = this.viewer, self = this;
-  Object.keys(this.store.drones).forEach(function (k) {
-    var d = self.store.drones[k];
-    if (!d.home) return;
-    v.entities.add({
-      position: self.pos(d.home[0], d.home[1], 0.1),
-      ellipse: { semiMajorAxis: 5, semiMinorAxis: 5, material: Cesium.Color.WHITE.withAlpha(0.12),
-                 outline: true, outlineColor: Cesium.Color.WHITE.withAlpha(0.5), height: 0.1 },
-    });
-  });
+SW.beacon = function (css) {
+  var c = document.createElement('canvas'); c.width = c.height = 64;
+  var g = c.getContext('2d');
+  g.strokeStyle = css; g.lineWidth = 6; g.beginPath(); g.arc(32, 32, 24, 0, 2 * Math.PI); g.stroke();
+  g.fillStyle = css; g.beginPath(); g.arc(32, 32, 7, 0, 2 * Math.PI); g.fill();
+  g.strokeStyle = 'rgba(2,6,23,.8)'; g.lineWidth = 2; g.beginPath(); g.arc(32, 32, 28, 0, 2 * Math.PI); g.stroke();
+  return c;
 };
 
 SW.Scene.prototype._pick = function () {
@@ -279,8 +331,8 @@ SW.Scene.prototype.followDrone = function (id) {
   var ent = this.entities[id];
   if (!ent) return;
   this.viewer.trackedEntity = ent.e;
-  var k = this.heroScale / 6;
-  ent.e.viewFrom = new Cesium.Cartesian3(-22 * k, -22 * k, 9 * k);     // close chase camera
+  var k = Math.max(1, this.heroScale);
+  ent.e.viewFrom = new Cesium.Cartesian3(-9 * k, -9 * k, 4 * k);       // close chase camera
   this.follow = id;
 };
 
@@ -338,7 +390,7 @@ SW.Scene.prototype.update = function (t, wallDt) {
                                       vx: 0, vy: 0 });
     }
     st.s = smp;
-    st.pos = self.pos(smp.lat, smp.lon, Math.max(0.15 * self.heroScale, smp.alt));
+    st.pos = self.pos(smp.lat, smp.lon, Math.max(0.24 * self.modelScale, smp.alt + 0.24 * self.modelScale));
     // heading: Cesium = clockwise from north; swarm yaw_enu = CCW from east
     var heading = Math.PI / 2 - smp.yaw;
     var hpr = new Cesium.HeadingPitchRoll(heading, -smp.pitch, smp.roll);

@@ -201,7 +201,7 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
     <button data-layer="sensors" class="on">Sensors</button>
     <button data-layer="trails" class="on">Trails</button>
     <button data-layer="target" class="on">Target</button>
-    <button data-layer="truth">Truth</button>
+    <button data-layer="truth" class="on" title="people, cars, flood water and the moving car (simulation ground truth)">World</button>
     </span>
     <div id="ops"><div class="sep"></div>
       <button data-op="GOTO">◎ Dispatch</button><button data-op="SWARM">⬢ Perimeter</button>
@@ -228,14 +228,15 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
     <option value="lite">Lite — fastest</option></select>
   <label>Buildings</label>
   <select id="buildings" style="width:100%;background:rgba(2,6,23,.6);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:7px 9px">
-    <option value="height">Coloured by height</option><option value="white">Clean white</option>
-    <option value="photo">Photorealistic (Google 3D Tiles — needs token)</option><option value="off">Off</option></select>
+    <option value="photo">Photorealistic city (Google 3D Tiles — needs token; default with token)</option>
+    <option value="height">OSM buildings coloured by height (default without token)</option><option value="white">OSM buildings, clean white</option>
+    <option value="off">Off</option></select>
   <label>Mission recordings</label>
   <div style="display:flex;gap:6px;flex-wrap:wrap">
     <a class="pill" href="?replay=demos/showcase.json">Search · perimeter · intercept</a>
     <a class="pill" href="?replay=demos/flood.json">Flood recon</a>
     <a class="pill" href="?replay=demos/patrol.json">Patrol + intruder</a></div>
-  <label>Drone model scale (×, for visibility)</label>
+  <label>Drone size (1 = true size)</label>
   <input id="heroScale" type="number" min="1" max="30" step="1">
   <p>Saved in this browser. Reload to apply. Live mode needs <code>ros2 launch rosbridge_server rosbridge_websocket_launch.xml</code>.</p>
   <div style="display:flex;gap:6px;margin-top:10px"><button id="saveSettings" class="on">Save &amp; reload</button>

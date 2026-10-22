@@ -198,6 +198,8 @@ def derive_work_items(reg: TaskRegistry, now: float, formation_cfg,
             for s in range(n):
                 sx, sy = ring_slot_xy(centre[0], centre[1], r, s, n, now, t.created_t,
                                       ring_period(t, formation_cfg))
+                if t.kind == INTERCEPT and s == 0 and n > 1:
+                    sx, sy = centre            # the shadow: overhead, keeping the target in camera
                 if t.kind == PATROL:
                     # a standing patrol: bid for one shift; intercepts outrank it, so the
                     # nearest patrollers peel off to chase an intruder and come back after
