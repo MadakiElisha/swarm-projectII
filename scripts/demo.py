@@ -61,7 +61,7 @@ class Director(Node):
     def __init__(self, a):
         # in Gazebo the stage timers run on Gazebo's clock (like the drones): a PC that can't keep
         # Gazebo at real time slows the show down instead of cutting stages short
-        gz = bool(os.environ.get("SWARM_GZ_INFO")) and not a.wall_clock
+        gz = os.environ.get("SWARM_MODE") == "gazebo" and not a.wall_clock
         super().__init__("demo_director", parameter_overrides=[Parameter("use_sim_time", value=gz)])
         self.a = a
         self.fleet = load_fleet(a.fleet)
@@ -93,8 +93,13 @@ class Director(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def wait_clock(self):
+        t_end = time.time() + 15.0
         while self.now() == 0.0:                 # Gazebo's clock not running yet
             rclpy.spin_once(self, timeout_sec=0.2)
+            if time.time() > t_end:
+                say("no Gazebo clock on /clock - timing the stages by the wall clock", "r")
+                self.set_parameters([Parameter("use_sim_time", value=False)])
+                break
 
     # ------------------------------------------------------------ inputs
     def _on_car(self, m):
@@ -173,7 +178,7 @@ class Director(Node):
 
     def gz_view(self, *args):
         """Point the Gazebo window (only if Gazebo's GUI is up)."""
-        if not os.environ.get("SWARM_GZ_INFO") or not shutil.which("gz"):
+        if os.environ.get("SWARM_MODE") != "gazebo" or not shutil.which("gz"):
             return
         if self.gz_ok is None or (self.gz_ok is False and self.round <= 1):
             try:

@@ -37,7 +37,7 @@ source "${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
 [ -f "$VENV/bin/activate" ] && source "$VENV/bin/activate"
 source "$ROOT/ros2_ws/install/setup.bash"
 [ -f "$GZ_ENV" ] && source "$GZ_ENV"
-export SWARM_FLEET="$ROOT/areas/$AREA/fleet.yaml"
+export SWARM_FLEET="$ROOT/areas/$AREA/fleet.yaml" SWARM_MODE=$MODE
 # the standard ROS 2 middleware, whatever ~/.bashrc says (rmw_zenoh needs a router), on our own channel
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp ROS_DOMAIN_ID=\${SWARM_DOMAIN:-7}
 export ARDUPILOT_HOME="\${ARDUPILOT_HOME:-\$HOME/ardupilot}" ARDUPILOT_GAZEBO="\${ARDUPILOT_GAZEBO:-\$HOME/ardupilot_gazebo}"
