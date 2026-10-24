@@ -180,8 +180,13 @@ class VehicleManager(Node):
 
     def _set_rtl_alt(self, alt_cm):
         st = self.backend.set_param('RTL_ALT', alt_cm)
-        self.get_logger().info(f'{self.label}: RTL_ALT={alt_cm:.0f} cm '
-                               f'{"set" if st.accepted else "not set: " + st.reason}')
+        if not st.accepted:
+            self.get_logger().warn(f'{self.label}: RTL_ALT={alt_cm:.0f} cm not set: {st.reason}')
+        elif not getattr(self, '_rtl_logged', False):     # later updates (buildings on the way home) quietly
+            self._rtl_logged = True
+            self.get_logger().info(f'{self.label}: RTL_ALT={alt_cm:.0f} cm set (kept above the buildings on the way home)')
+        else:
+            self.get_logger().debug(f'{self.label}: RTL_ALT={alt_cm:.0f} cm')
 
     def _drain_events(self):
         for e in self.fsm.events:

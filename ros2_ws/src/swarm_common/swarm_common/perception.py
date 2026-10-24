@@ -425,6 +425,7 @@ class TargetTracker:
 GATE_MAX_M = 45.0          # MotionWatch association gate cap
 UNCONFIRMED_S = 8.0        # an unconfirmed MotionWatch track dies after this long unseen
 MIN_HIT_RATE = 0.3         # sightings per second: a car under a camera is seen often, false hits rarely
+MIN_PROGRESS_M = 5.0       # a mover's later sightings are this far on from its earlier ones
 LINE_RMS_M = 10.0          # sightings of a real mover lie on a line (constant velocity) to within this
 
 
@@ -446,6 +447,24 @@ def _straight(hist) -> bool:
     return math.sqrt(err / n) <= LINE_RMS_M
 
 
+def _kind(cls: str) -> str:
+    return "person" if cls in ("person", "pedestrian", "people") else "vehicle"
+
+
+def _progress(hist) -> bool:
+    """Has it actually gone somewhere? The later half of the sightings must sit clearly away
+    from the earlier half. Two parked things a few metres apart, seen in turn, make a track
+    that jitters back and forth (straight, even) but whose halves overlap."""
+    h = sorted(hist)
+    n = len(h) // 2
+    if n < 2:
+        return False
+    a, b = h[:n], h[-n:]
+    ax, ay = sum(p[1] for p in a) / n, sum(p[2] for p in a) / n
+    bx, by = sum(p[1] for p in b) / n, sum(p[2] for p in b) / n
+    return math.hypot(bx - ax, by - ay) >= MIN_PROGRESS_M
+
+
 class MotionWatch:
     """Perimeter surveillance: which detected things are MOVING inside an area.
 
@@ -459,6 +478,7 @@ class MotionWatch:
         self.classes = set(classes)
         self.gate_m = gate_m
         self.tracks: List[Tuple[str, _AB]] = []      # (first oid, track)
+        self.kind: Dict[str, str] = {}                # track -> "person" / "vehicle"
         self.reported: set = set()
         self._seen: Dict[str, float] = {}
 
@@ -469,7 +489,10 @@ class MotionWatch:
         for o in new:
             self._seen[o.oid] = o.t
             best, bd = None, 1e18
-            for _, trk in self.tracks:
+            grp = _kind(o.cls)
+            for k, trk in self.tracks:
+                if self.kind.get(k) != grp:      # a person never continues a car's track, nor vice versa
+                    continue
                 px, py = trk.predict(o.t)
                 d = math.hypot(o.x - px, o.y - py)
                 # a small gate: a wide one lets scattered false detections chain into a "mover"
@@ -477,6 +500,7 @@ class MotionWatch:
                     best, bd = trk, d
             if best is None:
                 self.tracks.append((o.oid, _AB(o)))
+                self.kind[o.oid] = grp
             else:
                 best.update(o, 0.5, 0.2)
         if len(self._seen) > 20000:
@@ -485,13 +509,16 @@ class MotionWatch:
         # sightings don't start new tracks (and raise the same intruder again)
         self.tracks = [(k, trk) for k, trk in self.tracks
                        if now - trk.t <= (60.0 if k in self.reported else UNCONFIRMED_S)]
+        live = {k for k, _ in self.tracks}
+        self.kind = {k: g for k, g in self.kind.items() if k in live}
         out = []
         for k, trk in self.tracks:
             if k in self.reported:
                 continue
             life = trk.t - trk.t0
             if trk.hits >= 6 and life >= 4.0 and trk.hits / life >= MIN_HIT_RATE \
-                    and trk.speed >= 0.8 and trk.displacement >= 8.0 and _straight(trk.hist):
+                    and trk.speed >= 0.8 and trk.displacement >= 8.0 and _straight(trk.hist) \
+                    and _progress(trk.hist):
                 self.reported.add(k)
                 x, y = trk.predict(now)
                 out.append((k, Track(k, "intruder", x, y, trk.vx, trk.vy, now, trk.hits)))

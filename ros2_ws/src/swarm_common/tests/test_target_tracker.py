@@ -72,3 +72,20 @@ def test_motion_watch_ignores_scattered_false_detections():
         if w.update(obs, t):
             return
     raise AssertionError("the real car was never reported")
+
+
+def test_motion_watch_two_parked_things_are_not_a_mover():
+    """Seen in turn, a parked car and a person (or two parked cars) 10 m apart must not add up
+    to something moving between them (live demo: a false intruder exactly like this)."""
+    from swarm_common.perception import MotionWatch
+    rnd = random.Random(5)
+    for classes in (("person", "vehicle"), ("vehicle", "vehicle")):
+        w = MotionWatch(0.0, 0.0, 110.0, 0.0)
+        obs = []
+        for k in range(400):
+            t = 0.5 * k
+            j = rnd.random() < 0.5
+            x, y = (-62.0, -18.0) if j else (-66.0, -8.5)
+            obs.append(Observation(f"s{k}", classes[0] if j else classes[1], x + rnd.gauss(0, 1), y + rnd.gauss(0, 1),
+                                   0.7, t, 1 + k % 3))
+            assert not w.update(obs, t), f"{classes}: false intruder at t={t}"
