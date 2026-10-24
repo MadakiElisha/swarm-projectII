@@ -47,3 +47,28 @@ def test_same_observations_same_answer_on_every_drone():
     a, ea = _feed(seed=3)
     b, eb = _feed(seed=3)
     assert ea == eb
+
+
+def test_motion_watch_ignores_scattered_false_detections():
+    """Random false positives all over a patrolled area must never add up to an intruder,
+    while a real car driving through is still reported."""
+    from swarm_common.perception import MotionWatch
+    rnd = random.Random(3)
+    w = MotionWatch(0.0, 0.0, 110.0, 0.0)
+    obs, n = [], 0
+    for k in range(600):                          # 5 drones x 2 Hz x 2 % false positives, 10 min
+        t = k * 1.0
+        if rnd.random() < 0.2:
+            r, a = 110 * rnd.random() ** 0.5, rnd.uniform(0, 6.28)
+            n += 1
+            obs.append(Observation(f"fp{n}", rnd.choice(["person", "vehicle"]), r * math.cos(a), r * math.sin(a),
+                                   0.6, t, 1))
+        assert not w.update(obs, t), f"false intruder at t={t}"
+    # a car crossing at 6 m/s, seen at 2 Hz with 2 m noise
+    for k in range(40):
+        t = 600.0 + 0.5 * k
+        obs.append(Observation(f"car{k}", "vehicle", -100 + 3.0 * k + rnd.gauss(0, 2), 5 + rnd.gauss(0, 2),
+                               0.8, t, 2))
+        if w.update(obs, t):
+            return
+    raise AssertionError("the real car was never reported")

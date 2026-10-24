@@ -487,8 +487,60 @@ def chase_among_towers(seed=33, loss=0.1) -> ScenarioResult:
     return r
 
 
+
+def exhibition_round(seed=41, loss=0.1) -> ScenarioResult:
+    """One round of scripts/demo.py: 5 drones patrol (wide view, no reserve); a car drives in
+    from outside and stops inside; the patrol's cameras raise it; two drones break off, one
+    holds over the stopped car, three keep patrolling; called off, all land on their pads."""
+    from ..area import synthetic_city
+    from ..config import DroneSpec, Fleet
+    area = synthetic_city(blocks=6, seed=11)
+    sw = SwarmCfg()
+    lx, ly = area["launch"]
+    drones = []
+    for i in range(5):
+        lat, lon = sw.origin.to_latlon(lx + (i % 3) * 15 - 15, ly + (i // 3) * 15 - 8)
+        drones.append(DroneSpec(id=i + 1, home_lat=lat, home_lon=lon))
+    sim = SwarmSim(Fleet(swarm=sw, drones=drones, area=area), seed=seed, net=NetCfg(loss=loss))
+    sim.realistic_detector = True
+    sim.camera_only = True
+    c = (135.0, 135.0)
+    sim.decoys = [(150, 120), (100, 150)]                       # parked inside: not intruders
+    t_car = 120.0
+    sim.quarry = Quarry(-300, 135, 6.0, 0.0, start=t_car, stop=t_car + 430 / 6.0)   # stops at (130, 135)
+    sim.at(2, lambda s: s.operator_task("PATROL-X", c[0], c[1], params={
+        "radius": 90.0, "reserve": 0, "responders": 2, "intercept_hold_s": 1800.0, "wide_view": True}, to={1}))
+    st = {"split": None, "over": []}
+
+    def watch(s):
+        q = s.quarry.at(s.t)
+        roles = [s.brains[i].current_item() or "" for i in s.brains]
+        if st["split"] is None and sum(r.startswith("INTERCEPT-") for r in roles) == 2:
+            st["split"] = (s.t, sum(r.startswith("PATROL-X") for r in roles))
+        if q and s.t > t_car + 430 / 6.0 + 15 and s.t < 300 and abs(s.t % 5) < 1e-6:
+            st["over"].append(min(math.hypot(v.x - q[0], v.y - q[1]) for v in s.veh.values()))
+        if abs(s.t - 300.0) < 1e-6:
+            for t in list(s.brains[1].registry.tasks.values()):
+                if not t.terminal:
+                    s.operator_task("CANCEL-" + t.id, 0.0, 0.0, to={1})
+    sim.run(560, watch)
+    r = ScenarioResult("exhibition_round", sim)
+    ints = [e for e in sim.events if e[2] == "PATROL-X" and e[3] == "INTRUDER"]
+    r.notes.append(f"intruder raised at {ints[0][0] - t_car:.0f} s after the car set off" if ints else "no intruder")
+    r.notes.append(f"split {st['split']}; nearest drone over the stopped car: "
+                   f"{max(st['over']) if st['over'] else -1:.0f} m (worst sample)")
+    r.checks["patrol formed"] = "PERIMETER_FORMED" in sim.event_names("PATROL-X")
+    r.checks["the cameras raised the intruder (no help)"] = bool(ints) and ints[0][0] > t_car
+    r.checks["two break off, three keep patrolling"] = st["split"] is not None and st["split"][1] == 3
+    r.checks["a drone holds over the stopped car (< 25 m)"] = bool(st["over"]) and max(st["over"]) < 25.0
+    r.checks["all back on their pads after the call-off"] = all(v.alt < 0.5 for v in sim.veh.values())
+    r.checks["no drone ever entered a building"] = sim.building_hits == 0
+    r.checks["no loss of separation"] = sim.los_samples == 0
+    return r
+
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
     "intercept_chase": intercept_chase,
+    "exhibition_round": exhibition_round,
     "chase_among_towers": chase_among_towers,
     "flood_recon": flood_recon,
     "patrol_intruder": patrol_intruder,

@@ -445,6 +445,8 @@ class DroneBrain:
                 on = math.hypot(tx - pos[0], ty - pos[1]) <= self.cfg.formation.on_station_band_m
                 self.phase = "ON_STATION" if on else "ENROUTE"
                 return (tx, ty), tvel, SP_VEL
+            elif it.kind == PATROL and parent.params.get("wide_view"):
+                self._wide_view = True          # surveillance from search height: wider footprint
             elif it.kind == INTERCEPT and it.slot == 1 and (vx or vy):
                 lt = self.cfg.formation.lead_time_s           # the cutter leads the quarry
                 tx, ty = tx + vx * lt, ty + vy * lt
@@ -671,11 +673,15 @@ class DroneBrain:
             n_alive = len(set(self.roster.alive(now, ROSTER_ALIVE_S)) | {self.id})
             n = max(1, min(int(t.params.get("responders", 2)), n_alive))
             iid = f"INTERCEPT-{t.id[len('PATROL-'):]}-{oid}"
-            self.registry.upsert(Task(iid, INTERCEPT, tr.x, tr.y, now, self.id, OPEN, now, {
-                "n_slots": n, "radius": float(t.params.get("intercept_radius", 60.0)),
-                "hold_s": float(t.params.get("intercept_hold_s", 120.0)),
-                "expires_at": now + 600.0, "from": t.id,
-                "desc": f"intruder inside {t.id}"}))
+            hold = float(t.params.get("intercept_hold_s", 120.0))
+            ip = {"n_slots": n, "radius": float(t.params.get("intercept_radius", 60.0)),
+                  "hold_s": hold, "expires_at": now + 600.0 + hold, "from": t.id,
+                  "desc": f"intruder inside {t.id}"}
+            sp = math.hypot(tr.vx, tr.vy)
+            if sp >= 1.0:          # where it is going: the responders hunt ahead of it if it's lost
+                ip["heading_deg"] = math.degrees(math.atan2(tr.vx, tr.vy)) % 360.0
+                ip["speed"] = sp
+            self.registry.upsert(Task(iid, INTERCEPT, tr.x, tr.y, now, self.id, OPEN, now, ip))
             out.events.append((t.id, "INTRUDER", f"moving object at ({tr.x:.0f}, {tr.y:.0f}) -> {iid}"))
             self._log(f"{t.id}: intruder at ({tr.x:.0f}, {tr.y:.0f}) -> {iid}")
             self._dirty = True

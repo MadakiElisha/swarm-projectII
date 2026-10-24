@@ -2,8 +2,12 @@
 
 Starts driving when
   * an INTERCEPT-<n> task request arrives (the car starts where the operator clicked), or
-  * a request arrives on /swarm/sim/start_target (an "intruder" for PATROL tests;
-    the drones do not listen to that topic).
+  * a request arrives on /swarm/sim/start_target (an "intruder" for PATROL tests and the
+    exhibition director; the drones do not listen to that topic). Its description may say
+      toward=x,y        drive there along the streets (then wander on)
+      toward=x,y stop   drive there and stop (stays parked, still visible to the cameras)
+      park              stand still where the request says
+      hide              no car at all (nothing published)
 With an OSM area it drives along real streets (road graph); otherwise straight.
 Publishes ground truth on /swarm/target_track; in Gazebo gz_quarry moves the car
 model so the drones' cameras see it. Never used on hardware.
@@ -77,29 +81,44 @@ class TargetMover(Node):
             self.start(msg.lat, msg.lon, msg.task_id)
 
     def on_start(self, msg):
+        desc = (msg.description or '').split()
+        if 'hide' in desc:
+            self._halt()
+            self.get_logger().warn('target hidden')
+            return
         toward = None
-        if 'toward=' in (msg.description or ''):      # an intruder heading for a place
-            try:
-                a, b = (float(v) for v in msg.description.split('toward=', 1)[1].split()[0].split(','))
-                toward = (a, b)
-            except ValueError:
-                pass
-        self.start(msg.lat, msg.lon, msg.task_id or 'intruder', toward)
+        for w in desc:
+            if w.startswith('toward='):                # an intruder heading for a place
+                try:
+                    a, b = (float(v) for v in w[len('toward='):].split(','))
+                    toward = (a, b)
+                except ValueError:
+                    pass
+        mode = 'park' if 'park' in desc else ('stop' if 'stop' in desc else 'drive')
+        self.start(msg.lat, msg.lon, msg.task_id or 'intruder', toward, mode)
 
-    def start(self, lat, lon, why, toward=None):
+    def _halt(self):
         self.stop_flag.set()
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=2.0)
+
+    def start(self, lat, lon, why, toward=None, mode='drive'):
+        self._halt()
         self.stop_flag = threading.Event()
-        self.thread = threading.Thread(target=self.run, args=(lat, lon, toward), daemon=True)
+        self.thread = threading.Thread(target=self.run, args=(lat, lon, toward, mode), daemon=True)
         self.thread.start()
         self.get_logger().warn(f'TARGET DRIVING ({why}) from {lat:.5f},{lon:.5f}')
 
-    def run(self, lat0, lon0, toward=None):
+    def run(self, lat0, lon0, toward=None, mode='drive'):
         speed = float(self.get_parameter('speed').value)
         duration = float(self.get_parameter('duration').value)
         x0, y0 = self.origin.to_enu(lat0, lon0)
-        if self.graph:
+        if mode == 'park':
+            path = [(x0, y0), (x0 + 1.0, y0)]
+            speed = 0.0
+        elif mode == 'stop' and toward is not None:
+            path = [(x0, y0)] + (self.graph.shortest((x0, y0), toward) if self.graph else [toward])
+        elif self.graph:
             rnd = random.Random(int(self.get_parameter('seed').value))
             if toward is not None:        # drive to the place along streets, then wander on
                 path = [(x0, y0)] + self.graph.shortest((x0, y0), toward)
@@ -117,14 +136,24 @@ class TargetMover(Node):
         while clk() == 0.0 and not self.stop_flag.is_set():          # sim time not started yet
             time.sleep(0.2)
         t0 = clk()
-        while not self.stop_flag.is_set() and clk() - t0 < duration:
+        length = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(path, path[1:]))
+        parked = False
+        while not self.stop_flag.is_set() and (mode != 'drive' or clk() - t0 < duration):
             s = speed * (clk() - t0)
+            if mode != 'drive' and s >= length:
+                s = length
+                if mode == 'stop' and not parked:
+                    parked = True
+                    self.get_logger().warn('TARGET STOPPED at %.0f,%.0f' % path[-1])
             (x, y), hdg = along(path, s)
             lat, lon = self.origin.to_latlon(x, y)
+            v = 0.0 if (mode == 'park' or parked) else speed
             m = TargetTrack()
             m.header.stamp = self.get_clock().now().to_msg()
             m.lat, m.lon = lat, lon
-            m.vel_e, m.vel_n = speed * math.cos(hdg), speed * math.sin(hdg)
+            # parked: a tiny velocity along the last heading keeps the Gazebo car facing the same way
+            v = max(v, 1e-3)
+            m.vel_e, m.vel_n = v * math.cos(hdg), v * math.sin(hdg)
             m.source = 'auto_mover'
             self.pub.publish(m)
             time.sleep(0.25)

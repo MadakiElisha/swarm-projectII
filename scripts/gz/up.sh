@@ -4,6 +4,8 @@
 #   scripts/gz/up.sh [area]              real ArduPilot (SITL) + simulated cameras, no Gazebo  (light, default)
 #   scripts/gz/up.sh [area] --gazebo    + Gazebo physics/rendering, YOLO on 2 rendered cameras (heavy)
 #   scripts/gz/up.sh [area] --gazebo --gui   ... with the Gazebo window
+#   scripts/gz/up.sh [area] --demo           exhibition: the director runs in the operator tab, the car
+#                                            waits outside, GCS in show mode (scripts/demo.sh does this)
 #
 #   tab "autopilots"  one ArduCopter per drone (+ Gazebo in --gazebo mode)
 #   tab "swarm"       the drones' software (vehicle managers, brains, cameras)
@@ -15,10 +17,11 @@
 # Uses gnome-terminal tabs; falls back to a tmux session "swarm" (tmux attach -t swarm).
 set -eo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-AREA="eko"; MODE=sitl; GUI=0
+AREA="eko"; MODE=sitl; GUI=0; DEMO=0
 for a in "$@"; do
-  case "$a" in --gazebo) MODE=gazebo;; --gui) GUI=1;; -*) echo "unknown option $a"; exit 1;; *) AREA="$a";; esac
+  case "$a" in --gazebo) MODE=gazebo;; --gui) GUI=1;; --demo) DEMO=1;; -*) echo "unknown option $a"; exit 1;; *) AREA="$a";; esac
 done
+TARGET=$([ "$DEMO" = 1 ] && echo off || echo auto)     # demo: the director drives the car
 VENV="${SWARM_VENV:-$HOME/swarm_venv}"
 GZ_ENV="$ROOT/sim/gz/$AREA/env.sh"
 [ -f "$ROOT/areas/$AREA/fleet.yaml" ] || { echo "no area '$AREA': python3 scripts/make_area.py $AREA --drones 5"; exit 1; }
@@ -53,14 +56,18 @@ sleep 2
 if [ "$MODE" = gazebo ]; then
   HL=$([ "$GUI" = 1 ] && echo 0 || echo 1)
   T1="HEADLESS=$HL scripts/gz/run_swarm.sh && echo && echo 'Leave this tab open. Autopilot logs: logs/gz/D*.log'"
-  T2="echo 'waiting 25 s for the autopilots...'; sleep 25; ros2 launch swarm_bringup swarm_gazebo.launch.py"
+  T2="echo 'waiting 25 s for the autopilots...'; sleep 25; ros2 launch swarm_bringup swarm_gazebo.launch.py target:=$TARGET"
 else
   T1="scripts/start_sitl_fleet.sh \"\$SWARM_FLEET\" && echo && echo 'Leave this tab open. Autopilot logs: logs/sitl/D*.log'"
-  T2="echo 'waiting 15 s for the autopilots...'; sleep 15; ros2 launch swarm_bringup swarm_sitl.launch.py flood:=$([ -n "${SWARM_FLOOD:-}" ] && echo true || echo false)"
+  T2="echo 'waiting 15 s for the autopilots...'; sleep 15; ros2 launch swarm_bringup swarm_sitl.launch.py target:=$TARGET flood:=$([ -n "${SWARM_FLOOD:-}" ] && echo true || echo false)"
 fi
 T3="sleep 30; python3 scripts/swarm_status.py"
-T4="(ros2 launch rosbridge_server rosbridge_websocket_launch.xml > logs/gz/rosbridge.log 2>&1 &); python3 scripts/fleet_info.py --json > gcs/fleet.local.json; (sleep 4; xdg-open http://localhost:8080 >/dev/null 2>&1 &); cd gcs && python3 -m http.server 8080"
-T5="cat docs/RUNBOOK.md | sed -n '/## 4/,/## 5/p' | head -60"
+T4="(ros2 launch rosbridge_server rosbridge_websocket_launch.xml > logs/gz/rosbridge.log 2>&1 &); python3 scripts/fleet_info.py --json > gcs/fleet.local.json; (sleep 4; xdg-open http://localhost:8080/$([ "$DEMO" = 1 ] && echo '?show=1') >/dev/null 2>&1 &); cd gcs && python3 -m http.server 8080"
+if [ "$DEMO" = 1 ]; then
+  T5="echo 'demo director: waits for the drones, then press Enter for each round'; sleep 40; python3 scripts/demo.py"
+else
+  T5="cat docs/RUNBOOK.md | sed -n '/## 4/,/## 5/p' | head -60"
+fi
 
 # one small script per tab (no quoting gymnastics)
 names=(autopilots swarm status gcs operator)

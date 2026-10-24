@@ -422,6 +422,30 @@ class TargetTracker:
         return Track("tracked", "vehicle", x, y, trk.vx, trk.vy, now, trk.hits)
 
 
+GATE_MAX_M = 45.0          # MotionWatch association gate cap
+UNCONFIRMED_S = 8.0        # an unconfirmed MotionWatch track dies after this long unseen
+MIN_HIT_RATE = 0.3         # sightings per second: a car under a camera is seen often, false hits rarely
+LINE_RMS_M = 10.0          # sightings of a real mover lie on a line (constant velocity) to within this
+
+
+def _straight(hist) -> bool:
+    """Do these (t, x, y) sightings fit constant-velocity motion? A real car's do (to a few metres
+    of detection noise); false detections strung together by the gate don't."""
+    n = len(hist)
+    if n < 4:
+        return False
+    tm = sum(h[0] for h in hist) / n
+    var = sum((h[0] - tm) ** 2 for h in hist)
+    if var < 1e-6:
+        return False
+    err = 0.0
+    for k in (1, 2):
+        m = sum(h[k] for h in hist) / n
+        b = sum((h[0] - tm) * (h[k] - m) for h in hist) / var
+        err += sum((h[k] - (m + b * (h[0] - tm))) ** 2 for h in hist)
+    return math.sqrt(err / n) <= LINE_RMS_M
+
+
 class MotionWatch:
     """Perimeter surveillance: which detected things are MOVING inside an area.
 
@@ -448,7 +472,8 @@ class MotionWatch:
             for _, trk in self.tracks:
                 px, py = trk.predict(o.t)
                 d = math.hypot(o.x - px, o.y - py)
-                if d <= min(150.0, self.gate_m + 3.0 * max(0.0, o.t - trk.t)) and d < bd:
+                # a small gate: a wide one lets scattered false detections chain into a "mover"
+                if d <= min(GATE_MAX_M, self.gate_m + 3.0 * max(0.0, o.t - trk.t)) and d < bd:
                     best, bd = trk, d
             if best is None:
                 self.tracks.append((o.oid, _AB(o)))
@@ -456,12 +481,17 @@ class MotionWatch:
                 best.update(o, 0.5, 0.2)
         if len(self._seen) > 20000:
             self._seen = {k: t for k, t in self._seen.items() if t >= now - 120.0}
-        self.tracks = [(k, trk) for k, trk in self.tracks if now - trk.t <= 60.0]
+        # unconfirmed tracks die quickly without sightings; reported ones linger so their
+        # sightings don't start new tracks (and raise the same intruder again)
+        self.tracks = [(k, trk) for k, trk in self.tracks
+                       if now - trk.t <= (60.0 if k in self.reported else UNCONFIRMED_S)]
         out = []
         for k, trk in self.tracks:
             if k in self.reported:
                 continue
-            if trk.hits >= 4 and trk.t - trk.t0 >= 4.0 and trk.speed >= 0.8 and trk.displacement >= 8.0:
+            life = trk.t - trk.t0
+            if trk.hits >= 6 and life >= 4.0 and trk.hits / life >= MIN_HIT_RATE \
+                    and trk.speed >= 0.8 and trk.displacement >= 8.0 and _straight(trk.hist):
                 self.reported.add(k)
                 x, y = trk.predict(now)
                 out.append((k, Track(k, "intruder", x, y, trk.vx, trk.vy, now, trk.hits)))
