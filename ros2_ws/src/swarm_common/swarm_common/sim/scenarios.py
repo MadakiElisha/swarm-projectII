@@ -487,7 +487,6 @@ def chase_among_towers(seed=33, loss=0.1) -> ScenarioResult:
     return r
 
 
-
 def exhibition_round(seed=41, loss=0.1) -> ScenarioResult:
     """One round of scripts/demo.py: 5 drones patrol (wide view, no reserve); a car drives in
     from outside and stops inside; the patrol's cameras raise it; two drones break off, one
@@ -537,6 +536,7 @@ def exhibition_round(seed=41, loss=0.1) -> ScenarioResult:
     r.checks["no drone ever entered a building"] = sim.building_hits == 0
     r.checks["no loss of separation"] = sim.los_samples == 0
     return r
+
 
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
     "intercept_chase": intercept_chase,

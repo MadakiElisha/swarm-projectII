@@ -173,7 +173,46 @@ Notes for Gazebo:
 Gazebo and the light mode are separate sessions: stop one (`scripts/swarm_down.sh`) before
 starting the other.
 
-## 6. If something looks wrong
+## 6. Exhibition: the demo loop
+
+One command starts everything; you press **Enter** for each round.
+
+```bash
+scripts/demo.sh eko                  # main screen: light mode + GCS show mode (recommended)
+scripts/demo.sh eko --gazebo --gui   # the same in Gazebo (heavy; the Gazebo camera follows the action)
+```
+
+The browser opens the GCS in **show mode** (`http://localhost:8080/?show=1`): drones drawn 3× size,
+a stage strip at the top, big **TARGET IDENTIFIED** / **TARGET CAUGHT** banners, the camera moves with
+the story and the chasing drone's camera view (with its detection box) opens large.
+In the **operator** tab the director waits for all 5 drones, then:
+
+| stage | what happens | the swarm logic on show |
+|---|---|---|
+| 1 LAUNCH | take-off from the pads, patrol ring forms | nobody is told which slot to take (consensus) |
+| 2 INTRUSION | a car drives in from outside along the streets | the drones are not told about it |
+| 3 ACQUISITION | a patrol drone's camera sees it moving → **TARGET IDENTIFIED** | parked cars are ignored; moving = intruder |
+| 4 TRACKING | 2 drones break off (one overhead, one circling), 3 keep patrolling; the car stops, they hold over it → **TARGET CAUGHT** | the nearest drones decide among themselves who goes |
+| 5 RESET | tasks called off; every drone flies home around the buildings and lands on its own pad; batteries swapped | each drone plans its own way back |
+
+A round takes about 4–5 minutes. Keys in the operator tab (then Enter): **Enter** next round,
+**r** reset now (everyone home), **q** quit after this round.
+
+* Every stage has a time limit. If the cameras miss the car, the director points it out the
+  way an operator would and says so on screen ("handed over by the operator"); a round always
+  ends with everyone on their pads.
+* The car comes from a different side each round. Patrol size/place: `scripts/demo.py --radius 120
+  --centre x,y` (run it yourself in the operator tab instead of the automatic one).
+* Two screens: GCS on one; on the other the Gazebo window (`--gazebo --gui`) or a pop-out camera
+  view (⧉ in the Cameras panel).
+* Gazebo: the drones are drawn 3× size too (graphics only - physics and the drones' own cameras are
+  unchanged). Build the world once with `python3 scripts/gz/make_world.py --fleet areas/eko/fleet.yaml`
+  (`--drone-scale 1` = true size). The director points the Gazebo camera: launch site → patrol → car →
+  chasing drone → launch site.
+* Offline / no OSM area: `scripts/demo.sh demo-city` (a generated city, 5 drones).
+* Simulation only: the director refuses to run if any drone in the fleet is not a local simulator.
+
+## 7. If something looks wrong
 
 | you see | do |
 |---|---|

@@ -138,6 +138,9 @@ SW.LiveSource.prototype.attach = function (store, onStatus) {
       store.cams[d.id] = { t: Date.now() / 1000, src: 'data:image/jpeg;base64,' + m.data };
     }, 400);
   });
+  topic('/swarm/demo/stage', 'std_msgs/msg/String', function (m) {     // exhibition director (scripts/demo.py)
+    try { store.demo = JSON.parse(m.data); store.demoV = (store.demoV || 0) + 1; } catch (e) { /* ignore */ }
+  });
   topic('/swarm/sim/scene', 'std_msgs/msg/String', function (m) {      // simulation only: the world
     try { store.world = JSON.parse(m.data); store.worldV = (store.worldV || 0) + 1; } catch (e) { /* ignore */ }
   }, 2000);

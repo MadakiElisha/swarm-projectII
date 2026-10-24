@@ -115,6 +115,7 @@ SW.Store.prototype.brain = function (t, b) {     // b: {i, ph, tk, sc, nb:[[id,q
 
 SW.Store.prototype.setTasks = function (t, list) {
   var self = this, seen = {};
+  this.firstSeen = this.firstSeen || {};
   list.forEach(function (tk) {
     seen[tk.id] = 1;
     var old = self.tasks[tk.id];
@@ -126,6 +127,7 @@ SW.Store.prototype.setTasks = function (t, list) {
         self.feed(t, '＋', 'people found by the search - confirm in Tasks to send a drone', 'warn');
       }
     } else if (!old) self.feed(t, '＋', tk.id + ' created', 'info');
+    if (!old) self.firstSeen[tk.id] = Date.now() / 1000;
     else if (old.st !== tk.st && tk.st === 'MERGED') { /* duplicate sighting folded: not news */ }
     else if (old.st !== tk.st) {
       var icon = { OPEN: '✔', DONE: '✓', MERGED: '⇢', CANCELLED: '✕' }[tk.st] || '•';

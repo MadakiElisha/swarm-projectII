@@ -208,6 +208,7 @@ CAMERA_SDF = """
           <horizontal_fov>{hfov}</horizontal_fov>
           <image><width>{w}</width><height>{h}</height><format>R8G8B8</format></image>
           <clip><near>0.2</near><far>800</far></clip>
+          <visibility_mask>1</visibility_mask>
         </camera>
         <always_on>1</always_on><update_rate>{fps}</update_rate><visualize>false</visualize>
         <topic>/swarm/{label}/camera/image</topic>
@@ -219,7 +220,51 @@ CAMERA_SDF = """
 """
 
 
-def _drone_model(models_dir, apgz_models, drone_id, label, camera):
+# Show shell: the drone DRAWN larger (exhibitions: a 0.5 m quad is a speck from the launch site
+# camera). Visual only - no collision, ~no mass, rigidly attached - so the physics and flight are
+# those of the real-size drone. Hidden from the drones' own cameras (visibility flag 2 vs camera
+# mask 1) and casts no shadow, so perception sees the world exactly as before.
+PALETTE = ["0.22 0.74 0.97", "0.96 0.45 0.71", "0.64 0.90 0.21", "0.98 0.75 0.14", "0.75 0.52 0.99",
+           "0.20 0.83 0.60", "0.98 0.44 0.52", "0.38 0.65 0.98", "0.98 0.80 0.08", "0.18 0.83 0.75"]
+SHELL_SDF = """
+    <!-- swarm: show shell ({k}x, visual only) -->
+    <link name="swarm_show_shell">
+      <pose relative_to="iris_with_standoffs::base_link">0 0 0 0 0 0</pose>
+      <inertial><mass>0.001</mass><inertia><ixx>1e-7</ixx><iyy>1e-7</iyy><izz>1e-7</izz></inertia></inertial>
+      <visual name="body">
+        <visibility_flags>2</visibility_flags><cast_shadows>false</cast_shadows>
+        <geometry><mesh><uri>model://iris_with_standoffs/meshes/iris.dae</uri><scale>{k} {k} {k}</scale></mesh></geometry>
+        <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.10 0.10 0.11 1</diffuse>
+          <specular>0.6 0.6 0.6 1</specular></material>
+      </visual>{props}
+      <visual name="light"><pose>0 0 {lz:.3f} 0 0 0</pose>
+        <visibility_flags>2</visibility_flags><cast_shadows>false</cast_shadows>
+        <geometry><sphere><radius>{lr:.3f}</radius></sphere></geometry>
+        <material><ambient>{c} 1</ambient><diffuse>{c} 1</diffuse><emissive>{c} 1</emissive></material>
+      </visual>
+    </link>
+    <joint name="swarm_show_shell_joint" type="fixed">
+      <parent>iris_with_standoffs::base_link</parent><child>swarm_show_shell</child>
+    </joint>
+"""
+SHELL_PROP = """
+      <visual name="prop{i}"><pose>{x:.3f} {y:.3f} {z:.3f} 0 0 0</pose>
+        <visibility_flags>2</visibility_flags><cast_shadows>false</cast_shadows>
+        <geometry><cylinder><radius>{r:.3f}</radius><length>0.01</length></cylinder></geometry>
+        <material><ambient>0.85 0.88 0.92 0.35</ambient><diffuse>0.85 0.88 0.92 0.35</diffuse></material>
+        <transparency>0.55</transparency>
+      </visual>"""
+
+
+def _show_shell(k, drone_id):
+    rotors = [(0.13, -0.22), (-0.13, 0.20), (0.13, 0.22), (-0.13, -0.20)]   # iris_with_standoffs rotors
+    props = "".join(SHELL_PROP.format(i=i, x=x * k, y=y * k, z=0.035 * k, r=0.12 * k)
+                    for i, (x, y) in enumerate(rotors))
+    return SHELL_SDF.format(k=k, props=props, lz=0.06 * k, lr=0.045 * k,
+                            c=PALETTE[(drone_id - 1) % len(PALETTE)])
+
+
+def _drone_model(models_dir, apgz_models, drone_id, label, camera, show_scale=1.0):
     src = os.path.join(apgz_models, "iris_with_ardupilot", "model.sdf")
     with open(src) as f:
         sdf = f.read()
@@ -233,6 +278,9 @@ def _drone_model(models_dir, apgz_models, drone_id, label, camera):
         cam = CAMERA_SDF.format(label=label, **camera)
         i = sdf.rindex("</model>")
         sdf = sdf[:i] + cam + sdf[i:]
+    if show_scale and show_scale > 1.0:
+        i = sdf.rindex("</model>")
+        sdf = sdf[:i] + _show_shell(show_scale, drone_id) + sdf[i:]
     d = os.path.join(models_dir, name)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "model.sdf"), "w") as f:
@@ -329,7 +377,7 @@ def build(args):
         # rendering cameras is the expensive part: only the first --camera-drones get one
         # (the others use simulated cameras); --camera-drones 0 = all
         name, port = _drone_model(models, os.path.join(apgz, "models"), d.id, d.label,
-                                  camera if k < cam_n else None)
+                                  camera if k < cam_n else None, args.drone_scale)
         x, y = o.to_enu(d.home_lat, d.home_lon)
         spawns.append({"id": d.id, "label": d.label, "model": name, "x": round(x, 2), "y": round(y, 2),
                        "fdm_port": port})
@@ -458,6 +506,8 @@ def main():
     ap.add_argument("--no-camera", action="store_true", help="physics only (no GPU needed)")
     ap.add_argument("--camera-drones", type=int, default=2,
                     help="how many drones get a rendered camera (0 = all); the rest use simulated cameras")
+    ap.add_argument("--drone-scale", type=float, default=3.0,
+                    help="draw the drones this much larger in the Gazebo window (visual only; 1 = true size)")
     ap.add_argument("--cam-w", type=int, default=640)
     ap.add_argument("--cam-h", type=int, default=400)
     ap.add_argument("--cam-fps", type=float, default=5.0)

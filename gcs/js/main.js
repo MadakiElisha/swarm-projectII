@@ -18,7 +18,12 @@ var SW = window.SW || (window.SW = {});
     SW.geo.setOrigin(fleet.origin[0], fleet.origin[1]);
     var store = SW.store = new SW.Store(fleet);
     source.attach(store, function () {});
-    var hero = parseFloat(SW.settings.get('droneScale') || '1') || 1;
+    // ?show=1: exhibition show mode (scripts/demo.sh) - drones drawn larger, stage captions,
+    // the camera follows the story; ?scale=N sets the drone size (default 3 in show mode)
+    SW.SHOW = q.has('show');
+    if (SW.SHOW) document.body.classList.add('show');
+    var hero = SW.SHOW ? (parseFloat(q.get('scale') || '3') || 3)
+                       : (parseFloat(SW.settings.get('droneScale') || '1') || 1);
     var scene = SW.scene = new SW.Scene('globe', store, { heroScale: hero, modelUri: SW.MODEL_URI || 'assets/drone.glb' });
     var ov = SW.overlays = new SW.Overlays(scene, store);
     if (source.kind === 'replay') {

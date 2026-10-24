@@ -235,7 +235,7 @@ SW.Scene.prototype._ensureDrone = function (d) {
     position: new Cesium.CallbackProperty(function () { return st.pos; }, false),
     orientation: new Cesium.CallbackProperty(function () { return st.q; }, false),
     model: {
-      uri: this.modelUri, scale: this.modelScale, minimumPixelSize: 56, maximumScale: 4000,
+      uri: this.modelUri, scale: this.modelScale, minimumPixelSize: SW.SHOW ? 96 : 56, maximumScale: 4000,
       shadows: self.lite ? Cesium.ShadowMode.DISABLED : Cesium.ShadowMode.ENABLED, nodeTransformations: nodes,
       silhouetteColor: color, silhouetteSize: new Cesium.CallbackProperty(function () {
         return self.selected === d.id ? 2.5 : 1.0; }, false),
@@ -256,8 +256,9 @@ SW.Scene.prototype._ensureDrone = function (d) {
   // beacon: a coloured ring that keeps every drone findable from far away
   v.entities.add({
     position: new Cesium.CallbackProperty(function () { return st.pos; }, false),
-    billboard: { image: SW.beacon(SW.colorOf(d.id)), scale: 0.5, disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                 distanceDisplayCondition: new Cesium.DistanceDisplayCondition(450, 1e7),
+    billboard: { image: SW.beacon(SW.colorOf(d.id)), scale: SW.SHOW ? 0.75 : 0.5,
+                 disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                 distanceDisplayCondition: new Cesium.DistanceDisplayCondition(SW.SHOW ? 250 : 450, 1e7),
                  show: new Cesium.CallbackProperty(function () { return !!st.s; }, false) },
   });
   // drop line + ground ring: makes altitude readable
@@ -338,6 +339,16 @@ SW.Scene.prototype.followDrone = function (id) {
   this.follow = id;
 };
 
+/* look at a point on the ground from range r (show mode: the car, the patrol) */
+SW.Scene.prototype.frame = function (x, y, r) {
+  this.unfollow();
+  var ll = SW.geo.toLatLon(x, y);
+  var target = Cesium.Cartesian3.fromDegrees(ll[1], ll[0], this.groundH);
+  this.viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, r), {
+    offset: new Cesium.HeadingPitchRange(Cesium.Math.toRadians(25), Cesium.Math.toRadians(-55), r * 2.4),
+    duration: 2.0 });
+};
+
 SW.Scene.prototype.unfollow = function () { this.viewer.trackedEntity = undefined; this.follow = null; };
 
 SW.Scene.prototype.overview = function (instant) {
@@ -350,6 +361,7 @@ SW.Scene.prototype.overview = function (instant) {
   });
   Object.keys(s.tasks).forEach(function (k) {
     var tk = s.tasks[k];
+    if (tk.st && tk.st !== 'OPEN' && tk.st !== 'SUGGESTED') return;    // what is going on now
     pts.push(SW.geo.toLatLon(tk.x, tk.y));
     if (tk.ar) { pts.push(SW.geo.toLatLon(tk.ar[0], tk.ar[1])); pts.push(SW.geo.toLatLon(tk.ar[2], tk.ar[3])); }
   });

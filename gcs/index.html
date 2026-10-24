@@ -51,6 +51,22 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
 #banner.bad { color: var(--bad); border-color: rgba(248,113,113,.5); }
 #banner.info { color: var(--muted); }
 #caption { padding: 8px 14px; max-width: 640px; text-align: center; color: #f1f5f9; display: none; font-size: 13px; }
+/* exhibition show mode (scripts/demo.sh) */
+#stagebar { display: none; flex-direction: column; align-items: center; gap: 6px; padding: 10px 18px; max-width: 900px; }
+#stagedots { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+#stagedots .st { font: 600 11px var(--mono); padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+#stagedots .st.done { color: var(--good); border-color: rgba(52,211,153,.4); }
+#stagedots .st.now { color: #020617; background: #fbbf24; border-color: #fbbf24; }
+#stagetitle { font-size: 19px; font-weight: 700; color: #f8fafc; text-align: center; }
+#stagedetail { font-size: 13px; color: var(--muted); text-align: center; }
+#scalenote { font-size: 10px; color: var(--dim); }
+#bigbanner { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); z-index: 9; display: none; white-space: nowrap;
+             font: 800 clamp(28px, 6vw, 64px) Inter, system-ui, sans-serif; letter-spacing: .06em; padding: 18px 38px;
+             border-radius: 16px; background: rgba(2,6,23,.72); pointer-events: none; animation: bbpulse 1s ease-in-out infinite; }
+#bigbanner.warn { color: #fbbf24; border: 3px solid #fbbf24; }
+#bigbanner.good { color: #34d399; border: 3px solid #34d399; }
+@keyframes bbpulse { 50% { opacity: .55; } }
+body.show #cams { max-height: calc(100vh - 360px); bottom: 110px; }
 #topright { pointer-events: auto; display: flex; gap: 6px; padding: 6px; }
 
 /* ---- camera panel */
@@ -90,7 +106,8 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
 .chip.ENROUTE, .chip.CLAIMING { color: #7dd3fc; background: rgba(56,189,248,.14); }
 .chip.ON_STATION, .chip.ON_TASK { color: var(--good); background: rgba(52,211,153,.14); }
 .chip.SEARCH { color: #67e8f9; background: rgba(34,211,238,.14); }
-.chip.RTB { color: var(--warn); background: rgba(251,191,36,.14); }
+.chip.RTB, .chip.LANDING { color: var(--warn); background: rgba(251,191,36,.14); }
+.chip.OPERATOR { color: #93c5fd; background: rgba(147,197,253,.14); }
 .chip.FAILSAFE, .chip.LOST { color: var(--bad); background: rgba(248,113,113,.16); }
 .drone .task { color: var(--muted); font: 11px var(--mono); margin-left: auto; white-space: nowrap; overflow: hidden;
                text-overflow: ellipsis; max-width: 110px; }
@@ -175,6 +192,8 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
   <div id="center">
     <div id="banner" class="glass"></div>
     <div id="caption" class="glass"></div>
+    <div id="stagebar" class="glass"><div id="stagedots"></div><div id="stagetitle"></div>
+      <div id="stagedetail"></div><div id="scalenote"></div></div>
   </div>
   <div id="topright" class="glass">
     <button id="btnOverview" title="Fit the whole mission">⌖ Overview</button>
@@ -260,6 +279,7 @@ button.danger { background: rgba(248,113,113,.15); border-color: rgba(248,113,11
   <div style="display:flex;gap:6px;margin-top:10px"><button id="saveSettings" class="on">Save &amp; reload</button>
     <button id="closeSettings">Close</button></div>
 </div>
+<div id="bigbanner"></div>
 <div id="cams" class="glass"><div class="hd"><b>Cameras</b><span id="camsHint">click a view to enlarge · ⧉ pops out</span></div>
   <div id="camgrid"></div></div>
 <div id="popup" class="glass"></div>

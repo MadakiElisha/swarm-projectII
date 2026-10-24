@@ -34,6 +34,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
@@ -58,7 +59,10 @@ def banner(txt, col="y"):
 
 class Director(Node):
     def __init__(self, a):
-        super().__init__("demo_director")
+        # in Gazebo the stage timers run on Gazebo's clock (like the drones): a PC that can't keep
+        # Gazebo at real time slows the show down instead of cutting stages short
+        gz = bool(os.environ.get("SWARM_GZ_INFO")) and not a.wall_clock
+        super().__init__("demo_director", parameter_overrides=[Parameter("use_sim_time", value=gz)])
         self.a = a
         self.fleet = load_fleet(a.fleet)
         self.o = self.fleet.swarm.origin
@@ -72,11 +76,11 @@ class Director(Node):
         self.cmd = self.create_publisher(DroneCommand, "/swarm/commands", 10)
         for lb in self.labels:
             self.create_subscription(VehicleState, f"/swarm/{lb}/vehicle_state",
-                                     lambda m, lb=lb: self.vs.__setitem__(lb, (time.time(), m)), 10)
+                                     lambda m, lb=lb: self.vs.__setitem__(lb, (self.now(), m)), 10)
         self.create_subscription(NeighborReport, "/swarm/neighbors",
-                                 lambda m: self.nb.__setitem__(m.label, (time.time(), m)), 50)
+                                 lambda m: self.nb.__setitem__(m.label, (self.now(), m)), 50)
         self.create_subscription(MissionEvent, "/swarm/mission_event",
-                                 lambda m: self.events.append((time.time(), m)), 100)
+                                 lambda m: self.events.append((self.now(), m)), 100)
         self.create_subscription(TargetTrack, "/swarm/target_track", self._on_car, 10)
         self.round = 0
         self.keys = queue.Queue()
@@ -85,21 +89,28 @@ class Director(Node):
         self.gz_ok = None
         self.plan = self._plan()
 
+    def now(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def wait_clock(self):
+        while self.now() == 0.0:                 # Gazebo's clock not running yet
+            rclpy.spin_once(self, timeout_sec=0.2)
+
     # ------------------------------------------------------------ inputs
     def _on_car(self, m):
         x, y = self.o.to_enu(m.lat, m.lon)
-        self.car = (time.time(), x, y, m.vel_e, m.vel_n)
+        self.car = (self.now(), x, y, m.vel_e, m.vel_n)
 
     def spin_for(self, s):
-        end = time.time() + s
-        while time.time() < end:
+        end = self.now() + s
+        while self.now() < end:
             rclpy.spin_once(self, timeout_sec=0.1)
             self._poll_keys()
 
     def wait(self, cond, timeout, every=None):
         """Spin until cond() is truthy (returns it) or timeout (returns None). 'r' aborts."""
-        end, nxt = time.time() + timeout, 0.0
-        while time.time() < end:
+        end, nxt = self.now() + timeout, 0.0
+        while self.now() < end:
             rclpy.spin_once(self, timeout_sec=0.1)
             self._poll_keys()
             if self.reset_now:
@@ -107,8 +118,8 @@ class Director(Node):
             v = cond()
             if v:
                 return v
-            if every and time.time() >= nxt:
-                nxt = time.time() + 10.0
+            if every and self.now() >= nxt:
+                nxt = self.now() + 10.0
                 every()
         return None
 
@@ -231,7 +242,7 @@ class Director(Node):
     # ------------------------------------------------------------ helpers
     def fresh(self, lb, s=3.0):
         v = self.vs.get(lb)
-        return v[1] if v and time.time() - v[0] <= s else None
+        return v[1] if v and self.now() - v[0] <= s else None
 
     def on_ground(self, lb):
         m = self.fresh(lb)
@@ -240,7 +251,7 @@ class Director(Node):
     def holders(self, prefix):
         out = []
         for lb, (t, m) in sorted(self.nb.items()):
-            if time.time() - t <= 4.0 and m.current_task.startswith(prefix):
+            if self.now() - t <= 4.0 and m.current_task.startswith(prefix):
                 out.append(lb)
         return out
 
@@ -251,12 +262,12 @@ class Director(Node):
         return None
 
     def car_xy(self):
-        if self.car and time.time() - self.car[0] <= 3.0:
+        if self.car and self.now() - self.car[0] <= 3.0:
             return self.car[1], self.car[2]
         return None
 
     def car_speed(self):
-        return math.hypot(self.car[3], self.car[4]) if self.car and time.time() - self.car[0] <= 3.0 else None
+        return math.hypot(self.car[3], self.car[4]) if self.car and self.now() - self.car[0] <= 3.0 else None
 
     def battery_swap(self):
         """Simulated battery swap on the pad: MAV_CMD_BATTERY_RESET on each SITL's spare port."""
@@ -297,7 +308,7 @@ class Director(Node):
                     out.append(f"{lb}: in the air ({m.fsm_state})")
                 elif m.battery_pct < 60:
                     out.append(f"{lb}: battery {m.battery_pct:.0f}%")
-                elif lb not in self.nb or time.time() - self.nb[lb][0] > 5:
+                elif lb not in self.nb or self.now() - self.nb[lb][0] > 5:
                     out.append(f"{lb}: brain silent")
             return out
         say("waiting for all drones on their pads, linked, brains running ...")
@@ -312,7 +323,7 @@ class Director(Node):
         P = self.plan
         cx, cy = P["centre"]
         sx, sy = P["starts"][(self.round - 1) % len(P["starts"])]
-        t_round = time.time()
+        t_round = self.now()
         pid = f"PATROL-D{self.round}{int(time.time()) % 1000:03d}"
         iid = None
 
@@ -334,7 +345,7 @@ class Director(Node):
         if not self.reset_now:
             self.stage(2, "an unknown car drives into the patrolled area",
                        f"from ({sx:.0f}, {sy:.0f}) along the streets - the drones are not told", car=[sx, sy])
-            t_int = time.time()
+            t_int = self.now()
             self.car_cmd(sx, sy, f"toward={cx:.1f},{cy:.1f} stop")
             self.gz_view("follow", "quarry")
 
@@ -364,7 +375,7 @@ class Director(Node):
 
         # 4 TRACKING & SPLIT
         if iid and not self.reset_now:
-            t4 = time.time()
+            t4 = self.now()
             got = self.wait(lambda: self.holders(iid) if len(self.holders(iid)) >= 2 else None, 60)
             chasers = self.holders(iid)
             patrol = self.holders(pid)
@@ -449,6 +460,7 @@ class Director(Node):
 
     def show(self):
         P = self.plan
+        self.wait_clock()
         say(f"patrol centre ({P['centre'][0]:.0f}, {P['centre'][1]:.0f}) radius {P['radius']:.0f} m; "
             f"{len(P['starts'])} car routes; pads at ({P['pads'][0]:.0f}, {P['pads'][1]:.0f})")
         self.spin_for(2)
@@ -501,6 +513,7 @@ def main():
     ap.add_argument("--stage-timeout", type=float, default=180.0)
     ap.add_argument("--detect-timeout", type=float, default=150.0)
     ap.add_argument("--land-timeout", type=float, default=240.0)
+    ap.add_argument("--wall-clock", action="store_true", help="Gazebo: time stages by the wall clock")
     a = ap.parse_args()
     fleet = load_fleet(a.fleet)
     real = [d.label for d in fleet.drones

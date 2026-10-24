@@ -222,6 +222,7 @@ SW.UI.prototype.render = function () {
     mode.textContent = src.connected ? 'LIVE' : 'OFFLINE';
   }
   this.renderBanner();
+  this.renderDemo();
   this.renderRoster();
   this.renderTasks();
   this.renderFeed();
@@ -233,7 +234,47 @@ SW.UI.prototype.renderBanner = function () {
   var cls = b.ev === 'PERIMETER_FORMED' ? 'good' : b.ev === 'PERIMETER_DEGRADED' ? 'bad' : 'info';
   el.className = 'glass ' + cls; el.style.display = 'block';
   el.textContent = { PERIMETER_FORMED: '⬢ PERIMETER FORMED', PERIMETER_DEGRADED: '⬡ PERIMETER DEGRADED',
-                     RELEASED: '◌ RELEASED' }[b.ev] + ' · ' + b.task + ' · ' + b.detail;
+                     RELEASED: '◌ RELEASED', INTRUDER: '⚠ INTRUDER', FLOOD_MAP: '≋ FLOOD MAP' }[b.ev]
+                   + ' · ' + b.task + ' · ' + b.detail;
+};
+
+/* exhibition show mode: stage strip, big banners, the camera follows the story */
+SW.UI.prototype.renderDemo = function () {
+  var d = this.s.demo, bar = $('stagebar');
+  if (!d) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  var dots = '';
+  for (var k = 1; k <= 5; k++) {
+    dots += '<span class="st' + (k < d.stage ? ' done' : k === d.stage ? ' now' : '') + '">' + k + ' ' +
+      ['LAUNCH', 'INTRUSION', 'ACQUISITION', 'TRACKING', 'RESET'][k - 1] + '</span>';
+  }
+  $('stagedots').innerHTML = dots;
+  $('stagetitle').textContent = (d.round ? 'Round ' + d.round + ' · ' : '') + d.title;
+  $('stagedetail').textContent = d.detail || '';
+  $('scalenote').textContent = SW.SHOW && this.scene.heroScale > 1 ? 'drones drawn ' + this.scene.heroScale + '× size' : '';
+  var age = Date.now() / 1000 - d.t, bb = $('bigbanner');
+  if (d.banner && age >= 0 && age < 7) {
+    bb.textContent = d.banner === 'TARGET CAUGHT' ? '✓ TARGET CAUGHT' : '⚠ ' + d.banner;
+    bb.className = d.banner === 'TARGET CAUGHT' ? 'good' : 'warn';
+    bb.style.display = 'block';
+  } else bb.style.display = 'none';
+  if (this._demoV === this.s.demoV) return;           // the rest only when the stage changes
+  this._demoV = this.s.demoV;
+  if (d.stage === 1 && this._demoRound !== d.round) { this._demoRound = d.round; this.s.demoRoundT = d.t; }
+  if (!SW.SHOW) return;
+  var s = this.s, sc = this.scene, focus = d.focus ? parseInt(String(d.focus).replace(/^D/, ''), 10) : null;
+  var q = s.quarry;
+  if (d.stage === 1 && d.centre) sc.frame(d.centre[0], d.centre[1], (d.radius || 90) * 1.6);
+  else if (d.stage === 2 && d.car && d.car.length) sc.frame((d.car[0] + (s.demoCentre || d.car)[0]) / 2,
+                                                            (d.car[1] + (s.demoCentre || d.car)[1]) / 2, 260);
+  else if ((d.stage === 3 || d.stage === 4) && q) sc.frame(q.x, q.y, 120);
+  else if (d.stage === 5 || d.stage === 0) sc.overview();         // active tasks + drones: the way home
+  if (d.centre) s.demoCentre = d.centre;
+  if (focus && s.cams && s.cams[focus]) {             // that drone's camera, large
+    $('cams').style.display = 'block';
+    $('btnCams').classList.add('on');
+    this._bigCam = focus;
+  }
 };
 
 SW.UI.prototype.renderRoster = function () {
@@ -245,7 +286,12 @@ SW.UI.prototype.renderRoster = function () {
     var ok = s.alive(d, t);
     if (ok) alive++;
     if (ok && smp.alt > 1) air++;
-    var ph = !ok ? 'LOST' : (smp.latch ? 'FAILSAFE' : (b.ph || '—'));
+    // a latch is the safety controller holding the mission layer off. The swarm's own
+    // "land on my pad" / "fly home" is routine; the operator's RTL is deliberate; the rest
+    // (geofence, critical battery, lost brain) are real failsafes
+    var lt = smp.latch || '', routine = /^brain (LAND|RTB)$/.test(lt);
+    var ph = !ok ? 'LOST' : !lt ? (b.ph || '—') : lt === 'brain LAND' ? 'LANDING' : lt === 'brain RTB' ? 'RTB' :
+             /^operator/.test(lt) ? 'OPERATOR' : 'FAILSAFE';
     var batt = Math.max(0, smp.batt), margin = s.homeMargin(d, smp);
     var reserveAt = margin == null ? (e.reserve_pct || 20) : batt - margin;   // battery needed to get home
     var bc = batt > 50 ? '#34d399' : batt > 25 ? '#fbbf24' : '#f87171';
@@ -261,7 +307,7 @@ SW.UI.prototype.renderRoster = function () {
       '<span>' + smp.alt.toFixed(0) + ' m</span><span>' + Math.hypot(smp.vx, smp.vy).toFixed(1) + ' m/s</span>' +
       '<span title="neighbours heard directly · mean packet-receipt ratio">⇋ ' + nb + (nb ? ' · ' + Math.round(q * 100) + '%' : '') + '</span>' +
       (b.sc && b.sc > 1.2 ? '<span class="warn" title="learned drain vs model">drain ' + b.sc.toFixed(1) + '×</span>' : '') +
-      (smp.latch ? '<span class="bad">🔒 ' + esc(smp.latch) + '</span>' : '') + '</div></div>';
+      (lt && !routine ? '<span class="bad">🔒 ' + esc(lt) + '</span>' : '') + '</div></div>';
   });
   $('roster').innerHTML = html;
   $('fleetSummary').textContent = alive + ' alive · ' + air + ' airborne';
@@ -285,6 +331,12 @@ SW.UI.prototype.renderTasks = function () {
   // perception suggestions are grouped into ONE card instead of one card per person
   var sugg = ids.filter(function (id) { return s.tasks[id].k === 'RESCUE' && s.tasks[id].st === 'SUGGESTED'; });
   ids = ids.filter(function (id) { var tk = s.tasks[id]; return !(tk.k === 'RESCUE' && (tk.st === 'SUGGESTED' || tk.st === 'MERGED')); });
+  if (SW.SHOW && s.demoRoundT) {          // show mode: only this round's story, not earlier rounds' tasks
+    ids = ids.filter(function (id) {
+      var tk = s.tasks[id];
+      return tk.st === 'OPEN' || tk.st === 'SUGGESTED' || ((s.firstSeen || {})[id] || 0) >= s.demoRoundT - 5;
+    });
+  }
   if (sugg.length) {
     html += '<div class="tk"><div class="hd"><span class="id">' + sugg.length + ' ' + (sugg.length === 1 ? 'person' : 'people') +
       ' found</span><span class="chip">RESCUE</span><span class="chip st RTB">AWAITING YOU</span></div>' +
