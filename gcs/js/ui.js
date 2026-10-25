@@ -243,10 +243,10 @@ SW.UI.prototype.renderDemo = function () {
   var d = this.s.demo, bar = $('stagebar');
   if (!d) { bar.style.display = 'none'; return; }
   bar.style.display = 'flex';
-  var dots = '';
+  var dots = '', names = d.names || ['LAUNCH', 'INTRUSION', 'ACQUISITION', 'TRACKING', 'RESET'];
   for (var k = 1; k <= 5; k++) {
     dots += '<span class="st' + (k < d.stage ? ' done' : k === d.stage ? ' now' : '') + '">' + k + ' ' +
-      ['LAUNCH', 'INTRUSION', 'ACQUISITION', 'TRACKING', 'RESET'][k - 1] + '</span>';
+      names[k - 1] + '</span>';
   }
   $('stagedots').innerHTML = dots;
   $('stagetitle').textContent = (d.round ? 'Round ' + d.round + ' · ' : '') + d.title;
@@ -254,8 +254,9 @@ SW.UI.prototype.renderDemo = function () {
   $('scalenote').textContent = SW.SHOW && this.scene.heroScale > 1 ? 'drones drawn ' + this.scene.heroScale + '× size' : '';
   var age = Date.now() / 1000 - d.t, bb = $('bigbanner');
   if (d.banner && age >= 0 && age < 7) {
-    bb.textContent = d.banner === 'TARGET CAUGHT' ? '✓ TARGET CAUGHT' : '⚠ ' + d.banner;
-    bb.className = d.banner === 'TARGET CAUGHT' ? 'good' : 'warn';
+    var ok = d.banner === 'TARGET CAUGHT' || d.banner === 'STANDOFF ESTABLISHED';
+    bb.textContent = (ok ? '✓ ' : '⚠ ') + d.banner;
+    bb.className = ok ? 'good' : 'warn';
     bb.style.display = 'block';
   } else bb.style.display = 'none';
   if (this._demoV === this.s.demoV) return;           // the rest only when the stage changes
@@ -268,6 +269,7 @@ SW.UI.prototype.renderDemo = function () {
   else if (d.stage === 2 && d.car && d.car.length) sc.frame((d.car[0] + (s.demoCentre || d.car)[0]) / 2,
                                                             (d.car[1] + (s.demoCentre || d.car)[1]) / 2, 260);
   else if ((d.stage === 3 || d.stage === 4) && q) sc.frame(q.x, q.y, 120);
+  else if ((d.stage === 3 || d.stage === 4) && d.centre) sc.frame(d.centre[0], d.centre[1], 110);  // inspect: the structure
   else if (d.stage === 5 || d.stage === 0) sc.overview();         // active tasks + drones: the way home
   if (d.centre) s.demoCentre = d.centre;
   if (focus && s.cams && s.cams[focus]) {             // that drone's camera, large

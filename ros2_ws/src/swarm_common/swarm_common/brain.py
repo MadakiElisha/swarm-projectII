@@ -319,8 +319,24 @@ class DroneBrain:
                 if top > 0.0 and s.alt >= top:
                     alt = max(alt, top + self.planner.clear + 2.0)
             cur = self.items.get(self._cur_item)
+            ptask = self.registry.get(cur.parent) if cur is not None else None
+            if ptask is not None and "alt_m" in ptask.params:   # inspection: hold at a set height,
+                # each drone on its own layer so a close cordon stays vertically separated too.
+                # Fly in high on separated cruise layers; drop to inspection height only once near
+                # my own standoff slot (so the descents are spread around the structure, not stacked)
+                insp = float(ptask.params["alt_m"]) + (self.alt - self.cfg.motion.base_alt_m)
+                d_tgt = math.hypot(target[0] - pos[0], target[1] - pos[1])
+                band = self.cfg.formation.on_station_band_m
+                f = max(0.0, min(1.0, (3 * band - d_tgt) / (2 * band)))
+                alt = self.alt + f * (insp - self.alt)
+                if self.planner is not None and airborne:
+                    top = self.planner.roof_top(pos)
+                    if top > 0.0 and s.alt >= top:              # never descend onto a roof I'm over
+                        alt = max(alt, top + self.planner.clear + 2.0)
             mcfg = self.cfg.motion
-            if cur is not None and cur.kind == INTERCEPT:   # scramble / chase at full speed
+            # full speed for a chase, or a commanded precision approach (the brake still arrests
+            # it clear of the structure - it never touches it)
+            if (cur is not None and cur.kind == INTERCEPT) or (ptask is not None and ptask.params.get("fast")):
                 mcfg = dataclasses.replace(mcfg, cruise_speed_mps=mcfg.intercept_speed_mps)
             wp = self._route_to(pos, target, alt, now)
             if wp is not target:                  # a corner of a planned detour

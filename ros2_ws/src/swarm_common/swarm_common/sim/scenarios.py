@@ -487,6 +487,52 @@ def chase_among_towers(seed=33, loss=0.1) -> ScenarioResult:
     return r
 
 
+def exhibition_inspect(seed=43, loss=0.1) -> ScenarioResult:
+    """Structure inspection (scripts/demo.py --mission inspect): two drones take high overwatch,
+    three make a precision approach to a building and arrest at a standoff - a cordon clear of
+    the walls, never touching it. Checks: both rings form, the close drones hold off the faces
+    (not inside the footprint), no building contact, no loss of separation during the inspection."""
+    from ..area import synthetic_city
+    from ..config import DroneSpec, Fleet
+    area = synthetic_city(blocks=6, seed=11)
+    sw = SwarmCfg()
+    lx, ly = area["launch"]
+    drones = [DroneSpec(id=i + 1, home_lat=sw.origin.to_latlon(lx + (i % 3) * 15 - 15, ly + (i // 3) * 15 - 8)[0],
+                        home_lon=sw.origin.to_latlon(lx + (i % 3) * 15 - 15, ly + (i // 3) * 15 - 8)[1])
+              for i in range(5)]
+    sim = SwarmSim(Fleet(swarm=sw, drones=drones, area=area), seed=seed, net=NetCfg(loss=loss))
+    bx, by, half, standoff = 90.0, 330.0, 25.0, 18.0          # a 50 m, 109 m tower near the pads
+    R = half + standoff
+    sim.at(2, lambda s: s.operator_task("SWARM-OVW", bx, by, to={1},
+           params={"radius": 150.0, "n_slots": 2, "alt_m": 95.0, "period_s": 1e9, "hold_s": 900.0}))
+    sim.at(25, lambda s: s.operator_task("SWARM-INS", bx, by, to={1},
+           params={"radius": R, "n_slots": 3, "alt_m": 45.0, "fast": True, "period_s": 1e9, "hold_s": 120.0}))
+    st = {"close_min": 1e9, "close_max": 0.0, "split": None, "los_active": 0}
+
+    def watch(s):
+        ins = [i for i in s.brains if (s.brains[i].current_item() or "").startswith("SWARM-INS")]
+        ovw = [i for i in s.brains if (s.brains[i].current_item() or "").startswith("SWARM-OVW")]
+        if st["split"] is None and len(ins) == 3 and len(ovw) == 2:
+            st["split"] = (round(s.t), len(ins), len(ovw))
+        if 60 <= s.t <= 150:                                  # the hold: close drones must be at standoff
+            for i in ins:
+                d = math.hypot(s.veh[i].x - bx, s.veh[i].y - by)
+                st["close_min"] = min(st["close_min"], d)
+                st["close_max"] = max(st["close_max"], d)
+            st["los_active"] = sim.los_samples               # los accumulated through the inspection
+    sim.run(170, watch)
+    r = ScenarioResult("exhibition_inspect", sim)
+    r.notes.append(f"split {st['split']}; close drones {st['close_min']:.0f}-{st['close_max']:.0f} m from the "
+                   f"centre (footprint radius {half:.0f} m); los during inspection {st['los_active']}")
+    r.checks["overwatch formed"] = "PERIMETER_FORMED" in sim.event_names("SWARM-OVW")
+    r.checks["cordon formed on the structure"] = "PERIMETER_FORMED" in sim.event_names("SWARM-INS")
+    r.checks["three approach, two overwatch"] = st["split"] is not None
+    r.checks["cordon holds off the walls (never inside the footprint)"] = st["close_min"] >= half + 2.0
+    r.checks["no drone ever entered a building"] = sim.building_hits == 0
+    r.checks["no loss of separation during the inspection"] = st["los_active"] == 0
+    return r
+
+
 def exhibition_round(seed=41, loss=0.1) -> ScenarioResult:
     """One round of scripts/demo.py: 5 drones patrol (wide view, no reserve); a car drives in
     from outside and stops inside; the patrol's cameras raise it; two drones break off, one
@@ -541,6 +587,7 @@ def exhibition_round(seed=41, loss=0.1) -> ScenarioResult:
 ALL: Dict[str, Callable[..., ScenarioResult]] = {
     "intercept_chase": intercept_chase,
     "exhibition_round": exhibition_round,
+    "exhibition_inspect": exhibition_inspect,
     "chase_among_towers": chase_among_towers,
     "flood_recon": flood_recon,
     "patrol_intruder": patrol_intruder,

@@ -127,7 +127,9 @@ class DroneBrainNode(Node):
         for key, name, cast in (('intercept_hold=', 'intercept_hold_s', float),   # PATROL: how long a
                                 ('responders=', 'responders', int),               # responder chase
                                 ('reserve=', 'reserve', int),                     # lasts, how many go
-                                ('slots=', 'n_slots', int)):                      # SWARM/INTERCEPT: drones
+                                ('slots=', 'n_slots', int),                       # SWARM/INTERCEPT: drones
+                                ('alt=', 'alt_m', float),                         # SWARM: hold at this height
+                                ('hold=', 'hold_s', float)):                      # SWARM: seconds on station
             if key in desc:
                 try:
                     params[name] = cast(desc.split(key, 1)[1].split()[0].split(',')[0])
@@ -135,6 +137,10 @@ class DroneBrainNode(Node):
                     self.get_logger().warn(f'{self.label}: bad {key[:-1]} in {desc!r}')
         if 'wide=1' in desc.split():            # PATROL: fly it at search height (wider camera view)
             params['wide_view'] = True
+        if 'fast=1' in desc.split():            # SWARM: fly the approach at full speed (brake still arrests)
+            params['fast'] = True
+        if 'static=1' in desc.split():          # SWARM: hold position (don't rotate the ring)
+            params['period_s'] = 1e9
         if 'radius=' in desc:                   # PATROL / SWARM: radius=<metres>
             try:
                 params['radius'] = float(desc.split('radius=', 1)[1].split()[0].split(',')[0])

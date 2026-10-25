@@ -64,7 +64,7 @@ fi
 T3="sleep 30; python3 scripts/swarm_status.py"
 T4="(ros2 launch rosbridge_server rosbridge_websocket_launch.xml > logs/gz/rosbridge.log 2>&1 &); python3 scripts/fleet_info.py --json > gcs/fleet.local.json; (sleep 4; xdg-open http://localhost:8080/$([ "$DEMO" = 1 ] && echo '?show=1') >/dev/null 2>&1 &); cd gcs && python3 -m http.server 8080"
 if [ "$DEMO" = 1 ]; then
-  T5="echo 'demo director: waits for the drones, then press Enter for each round'; sleep 40; python3 scripts/demo.py"
+  T5="echo 'demo director: waits for the drones, then press Enter for each round'; sleep 40; python3 scripts/demo.py ${SWARM_DEMO_ARGS:-}"
 else
   T5="cat docs/RUNBOOK.md | sed -n '/## 4/,/## 5/p' | head -60"
 fi

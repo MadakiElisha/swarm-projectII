@@ -19,6 +19,17 @@ stage has a time limit, so a round always ends on the pads.
 
     scripts/demo.py                    # 5 drones, patrol placed automatically near the pads
     scripts/demo.py --radius 120 --centre 300,150 --hold 40
+
+Or the structure-inspection mission (precision approach + standoff, no contact):
+
+    1/5 LAUNCH       takes off; two drones take high overwatch
+    2/5 APPROACH     three drones make a fast precision run to a chosen building
+    3/5 STANDOFF     each arrests ~18 m off the walls - a cordon clear of the structure (no contact)
+    4/5 INSPECT      hold the standoff, cameras on the façades
+    5/5 RESET        home and land
+
+    scripts/demo.py --mission inspect [--structure x,y] [--inspect-hold 45]
+
 Keys (then Enter): Enter = start the next round, r = reset now, q = quit after this round.
 """
 import argparse
@@ -46,6 +57,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 C = {"b": "\033[1m", "y": "\033[1;33m", "g": "\033[1;32m", "r": "\033[1;31m", "c": "\033[1;36m",
      "d": "\033[2m", "0": "\033[0m"}
 STAGES = {0: "READY", 1: "LAUNCH", 2: "INTRUSION", 3: "ACQUISITION", 4: "TRACKING", 5: "RESET"}
+STAGE_NAMES = {
+    "patrol": {0: "READY", 1: "LAUNCH", 2: "INTRUSION", 3: "ACQUISITION", 4: "TRACKING", 5: "RESET"},
+    "inspect": {0: "READY", 1: "LAUNCH", 2: "APPROACH", 3: "STANDOFF", 4: "INSPECT", 5: "RESET"},
+}
 
 
 def say(txt, col="0"):
@@ -87,7 +102,12 @@ class Director(Node):
         self.reset_now = False
         self.quit = False
         self.gz_ok = None
-        self.plan = self._plan()
+        if self.a.mission == "inspect":
+            self.struct = self._pick_structure()
+            self.plan = {"pads": self.struct["pads"], "starts": [], "centre": (self.struct["cx"], self.struct["cy"]),
+                         "radius": self.struct["R"]}
+        else:
+            self.plan = self._plan()
 
     def now(self):
         return self.get_clock().now().nanoseconds * 1e-9
@@ -141,12 +161,13 @@ class Director(Node):
 
     # ------------------------------------------------------------ outputs
     def stage(self, n, title, detail="", **extra):
-        msg = {"round": self.round, "stage": n, "name": STAGES[n], "title": title, "detail": detail,
-               "t": time.time()}
+        names = STAGE_NAMES[self.a.mission]
+        msg = {"round": self.round, "stage": n, "name": names[n], "names": [names[k] for k in range(1, 6)],
+               "title": title, "detail": detail, "t": time.time()}
         msg.update(extra)
         self.stage_pub.publish(String(data=json.dumps(msg)))
         if n:
-            banner(f"{n}/5  {STAGES[n]}  -  {title}", "c")
+            banner(f"{n}/5  {names[n]}  -  {title}", "c")
         if detail:
             say(detail)
 
@@ -428,19 +449,22 @@ class Director(Node):
         return best if best and best[1] <= 25.0 else None
 
     def reset(self, pid, iid):
+        cancel = [pid] + ([iid] if iid and not iid.endswith("-") else [])
+        for t, m in list(self.events):          # every intercept this round spawned (merged twins too)
+            if iid and m.task_id.startswith(iid):
+                cancel.append(m.task_id)
+            if m.event == "INTRUDER" and "-> " in m.detail and m.task_id == pid:
+                cancel.append(m.detail.split("-> ")[-1].strip())
+        self._finish(cancel, car=True)
+
+    def _finish(self, task_ids, car=True):
         self.reset_now = False
         self.stage(5, "mission over - every drone flies home and lands on its pad",
                    "tasks called off; each drone plans its own way back around the buildings")
         self.gz_view("site")
         for _ in range(2):
-            if iid and not iid.endswith("-"):
-                self.cancel(iid)
-            self.cancel(pid)
-            for t, m in self.events:            # every intercept this round spawned (merged twins too)
-                if iid and m.task_id.startswith(iid):
-                    self.cancel(m.task_id)
-                if m.event == "INTRUDER" and "-> " in m.detail and m.task_id == pid:
-                    self.cancel(m.detail.split("-> ")[-1].strip())
+            for tid in task_ids:
+                self.cancel(tid)
             self.spin_for(1.0)
         landed = self.wait(lambda: all(self.on_ground(lb) for lb in self.labels), self.a.land_timeout)
         if not landed:
@@ -451,13 +475,97 @@ class Director(Node):
             self.wait(lambda: all(self.on_ground(lb) for lb in self.labels), 240)
             self.spin_for(3)
             self.command("ALL", "RESUME")
-        # the car goes back outside for the next round, parked (parked cars are not intruders)
-        nx, ny = self.plan["starts"][self.round % len(self.plan["starts"])]
-        self.car_cmd(nx, ny, "park")
-        self.spin_for(2)
+        if car:
+            # the car goes back outside for the next round, parked (parked cars are not intruders)
+            nx, ny = self.plan["starts"][self.round % len(self.plan["starts"])]
+            self.car_cmd(nx, ny, "park")
+            self.spin_for(2)
         self.battery_swap()
         self.stage(0, f"round {self.round} done", "ready for the next round")
         say(f"round {self.round} finished in {self._fmt(time.time() - self._t_start)}", "g")
+
+    # ------------------------------------------------- structure inspection
+    def _pick_structure(self):
+        """A building to inspect: tall enough to be worth it, a few hundred metres off the pads."""
+        pads = [self.fleet.home_enu(d.id) for d in self.fleet.drones]
+        px, py = sum(p[0] for p in pads) / len(pads), sum(p[1] for p in pads) / len(pads)
+        blds = (self.fleet.area or {}).get("buildings") or []
+        if not blds:
+            sys.exit("the inspect mission needs an area with buildings (OSM or --synthetic)")
+
+        def info(b):
+            xs = [p[0] for p in b["poly"]]
+            ys = [p[1] for p in b["poly"]]
+            cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+            half = max(max(xs) - min(xs), max(ys) - min(ys)) / 2
+            return cx, cy, half, float(b.get("h", 10.0))
+        if self.a.structure:
+            tx, ty = (float(v) for v in self.a.structure.split(","))
+            cx, cy, half, h = min((info(b) for b in blds), key=lambda t: math.hypot(t[0] - tx, t[1] - ty))
+        else:
+            cand = []
+            for b in blds:
+                cx, cy, half, h = info(b)
+                d = math.hypot(cx - px, cy - py)
+                if h >= 25.0 and 120.0 <= d <= 360.0:
+                    cand.append((abs(d - 220.0), cx, cy, half, h))
+            if not cand:
+                sys.exit("no suitable building 120-360 m from the pads; pass --structure x,y")
+            _, cx, cy, half, h = min(cand)
+        standoff = 18.0
+        return {"cx": cx, "cy": cy, "half": half, "h": h, "pads": (px, py), "standoff": standoff,
+                "R": half + standoff, "alt": min(45.0, max(20.0, h - 12.0))}
+
+    def run_inspect_round(self):
+        self.round += 1
+        self.reset_now = False
+        S = self.struct
+        cx, cy = S["cx"], S["cy"]
+        t0 = self.now()
+        ins = f"SWARM-INS-D{self.round}{int(time.time()) % 1000:03d}"
+        ovw = f"SWARM-OVW-D{self.round}{int(time.time()) % 1000:03d}"
+
+        # 1 LAUNCH - two drones take high overwatch first (so the groups never climb out together)
+        self.stage(1, "the swarm takes off; two drones take high overwatch",
+                   f"a {S['h']:.0f} m structure at ({cx:.0f}, {cy:.0f}); two cover it from above",
+                   centre=[cx, cy], radius=S["R"])
+        self.gz_view("site")
+        self.task(ovw, cx, cy, f"radius={max(140.0, S['R'] * 3):.0f} slots=2 alt=95 static=1 hold=900")
+        if self.wait(lambda: self.event(ovw, "PERIMETER_FORMED", t0), self.a.stage_timeout):
+            say(f"overwatch up: {', '.join(self.holders(ovw))}", "g")
+        self.spin_for(6)
+
+        # 2 APPROACH - three drones make the precision run in
+        formed = None
+        if not self.reset_now:
+            self.stage(2, "three drones make a precision approach to the structure",
+                       f"fast run in; each arrests ~{S['standoff']:.0f} m off the walls - clear, no contact",
+                       centre=[cx, cy])
+            self.task(ins, cx, cy,
+                      f"radius={S['R']:.0f} slots=3 alt={S['alt']:.0f} fast=1 static=1 hold={self.a.inspect_hold + 40:.0f}")
+            formed = self.wait(lambda: self.event(ins, "PERIMETER_FORMED", t0), self.a.stage_timeout)
+            hs = self.holders(ins)
+            self.gz_view("follow", hs[0] if hs else self.labels[0])
+
+        # 3 STANDOFF
+        if formed and not self.reset_now:
+            hs = self.holders(ins)
+            banner(f"STANDOFF ESTABLISHED  -  {len(hs)} drones on the structure", "g")
+            self.stage(3, f"standoff established - {len(hs)} drones on the structure, clear of the walls",
+                       "cameras on the façades; two drones hold high cover",
+                       banner="STANDOFF ESTABLISHED", centre=[cx, cy], focus=hs[0] if hs else None)
+        elif not self.reset_now:
+            say("cordon not fully formed in time - carrying on", "r")
+
+        # 4 INSPECT
+        if not self.reset_now:
+            self.stage(4, "inspecting the structure", f"holding {self.a.inspect_hold:.0f} s",
+                       centre=[cx, cy], focus=(self.holders(ins)[0] if self.holders(ins) else None))
+            self.spin_for(self.a.inspect_hold)
+            say(f"inspection complete: cordon held by {', '.join(self.holders(ins)) or '-'}", "g")
+
+        # 5 RESET
+        self._finish([ins, ovw], car=False)
 
     @staticmethod
     def _fmt(s):
@@ -466,11 +574,17 @@ class Director(Node):
     def show(self):
         P = self.plan
         self.wait_clock()
-        say(f"patrol centre ({P['centre'][0]:.0f}, {P['centre'][1]:.0f}) radius {P['radius']:.0f} m; "
-            f"{len(P['starts'])} car routes; pads at ({P['pads'][0]:.0f}, {P['pads'][1]:.0f})")
-        self.spin_for(2)
-        sx, sy = P["starts"][0]
-        self.car_cmd(sx, sy, "park")
+        if self.a.mission == "inspect":
+            S = self.struct
+            say(f"inspect target: a {S['h']:.0f} m structure at ({S['cx']:.0f}, {S['cy']:.0f}); "
+                f"cordon {S['R']:.0f} m radius (~{S['standoff']:.0f} m standoff); pads at "
+                f"({P['pads'][0]:.0f}, {P['pads'][1]:.0f})")
+        else:
+            say(f"patrol centre ({P['centre'][0]:.0f}, {P['centre'][1]:.0f}) radius {P['radius']:.0f} m; "
+                f"{len(P['starts'])} car routes; pads at ({P['pads'][0]:.0f}, {P['pads'][1]:.0f})")
+            self.spin_for(2)
+            sx, sy = P["starts"][0]
+            self.car_cmd(sx, sy, "park")
         threading.Thread(target=self._stdin, daemon=True).start()
         while not self.quit and (self.a.rounds == 0 or self.round < self.a.rounds):
             self.stage(0, "ready", "press Enter to start")
@@ -489,7 +603,10 @@ class Director(Node):
                 if self.quit:
                     break
             self._t_start = time.time()
-            self.run_round()
+            if self.a.mission == "inspect":
+                self.run_inspect_round()
+            else:
+                self.run_round()
         self.stage(0, "show over", "")
         say("bye")
 
@@ -510,8 +627,12 @@ def main():
     ap = argparse.ArgumentParser(description="exhibition director", epilog=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fleet", default=None)
+    ap.add_argument("--mission", choices=["patrol", "inspect"], default="patrol",
+                    help="patrol: launch->intrusion->track->home; inspect: precision standoff on a structure")
     ap.add_argument("--radius", type=float, default=90.0, help="patrol ring radius (m)")
     ap.add_argument("--centre", default=None, help="patrol centre x,y (default: a street near the pads)")
+    ap.add_argument("--structure", default=None, help="inspect: building to approach, x,y (default: auto)")
+    ap.add_argument("--inspect-hold", type=float, default=45.0, help="inspect: seconds to hold the standoff")
     ap.add_argument("--hold", type=float, default=30.0, help="seconds to hold over the stopped car")
     ap.add_argument("--rounds", type=int, default=0, help="0 = until you quit")
     ap.add_argument("--no-key", action="store_true", help="start rounds without waiting for Enter")
