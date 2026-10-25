@@ -324,8 +324,8 @@ class DroneBrain:
                 # each drone on its own layer so a close cordon stays vertically separated too.
                 # Fly in high on separated cruise layers; drop to inspection height only once near
                 # my own standoff slot (so the descents are spread around the structure, not stacked).
-                # Widen the per-layer offset (x2) so a close cordon keeps generous vertical room.
-                insp = float(ptask.params["alt_m"]) + 2.0 * (self.alt - self.cfg.motion.base_alt_m)
+                # Each drone on its own layer keeps a close cordon vertically separated too.
+                insp = float(ptask.params["alt_m"]) + (self.alt - self.cfg.motion.base_alt_m)
                 d_tgt = math.hypot(target[0] - pos[0], target[1] - pos[1])
                 band = self.cfg.formation.on_station_band_m
                 f = max(0.0, min(1.0, (3 * band - d_tgt) / (2 * band)))
