@@ -541,8 +541,10 @@ class Director(Node):
             self.stage(2, "three drones make a precision approach to the structure",
                        f"fast run in; each arrests ~{S['standoff']:.0f} m off the walls - clear, no contact",
                        centre=[cx, cy])
+            # a brisk coordinated run-in at cruise speed (not full chase speed - a structure isn't
+            # going anywhere, and it leaves the drones more room to stay separated climbing out)
             self.task(ins, cx, cy,
-                      f"radius={S['R']:.0f} slots=3 alt={S['alt']:.0f} fast=1 static=1 hold={self.a.inspect_hold + 40:.0f}")
+                      f"radius={S['R']:.0f} slots=3 alt={S['alt']:.0f} static=1 hold={self.a.inspect_hold + 40:.0f}")
             formed = self.wait(lambda: self.event(ins, "PERIMETER_FORMED", t0), self.a.stage_timeout)
             hs = self.holders(ins)
             self.gz_view("follow", hs[0] if hs else self.labels[0])
