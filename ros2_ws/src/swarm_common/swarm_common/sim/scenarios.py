@@ -505,8 +505,10 @@ def exhibition_inspect(seed=43, loss=0.1) -> ScenarioResult:
     R = half + standoff
     sim.at(2, lambda s: s.operator_task("SWARM-OVW", bx, by, to={1},
            params={"radius": 150.0, "n_slots": 2, "alt_m": 95.0, "period_s": 1e9, "hold_s": 900.0}))
+    arc_c = math.degrees(math.atan2(ly - by, lx - bx))        # the approach-facing side (towards the pads)
     sim.at(25, lambda s: s.operator_task("SWARM-INS", bx, by, to={1},
-           params={"radius": R, "n_slots": 3, "alt_m": 45.0, "fast": True, "period_s": 1e9, "hold_s": 120.0}))
+           params={"radius": R, "n_slots": 3, "alt_m": 45.0, "fast": True, "period_s": 1e9,
+                   "hold_s": 120.0, "arc_deg": 150.0, "arc_center_deg": arc_c}))
     st = {"close_min": 1e9, "close_max": 0.0, "split": None, "los_active": 0}
 
     def watch(s):

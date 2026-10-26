@@ -541,10 +541,12 @@ class Director(Node):
             self.stage(2, "three drones make a precision approach to the structure",
                        f"fast run in; each arrests ~{S['standoff']:.0f} m off the walls - clear, no contact",
                        centre=[cx, cy])
-            # fast coordinated run-in (needed to reach the far face of the cordon in time); each
-            # drone holds on its own layer, well separated vertically, and the brake arrests it clear
-            self.task(ins, cx, cy,
-                      f"radius={S['R']:.0f} slots=3 alt={S['alt']:.0f} fast=1 static=1 hold={self.a.inspect_hold + 40:.0f}")
+            # a frontal standoff: the three close drones spread across the approach-facing arc of the
+            # structure (none has to fly around to the far face), each on its own layer, the brake
+            # arresting each clear of the wall. arc centred on the bearing from the structure to the pads.
+            arc_c = math.degrees(math.atan2(S["pads"][1] - cy, S["pads"][0] - cx))
+            self.task(ins, cx, cy, f"radius={S['R']:.0f} slots=3 alt={S['alt']:.0f} fast=1 static=1 "
+                      f"arc=150 arcc={arc_c:.0f} hold={self.a.inspect_hold + 40:.0f}")
             formed = self.wait(lambda: self.event(ins, "PERIMETER_FORMED", t0), self.a.stage_timeout)
             hs = self.holders(ins)
             self.gz_view("follow", hs[0] if hs else self.labels[0])

@@ -129,7 +129,9 @@ class DroneBrainNode(Node):
                                 ('reserve=', 'reserve', int),                     # lasts, how many go
                                 ('slots=', 'n_slots', int),                       # SWARM/INTERCEPT: drones
                                 ('alt=', 'alt_m', float),                         # SWARM: hold at this height
-                                ('hold=', 'hold_s', float)):                      # SWARM: seconds on station
+                                ('hold=', 'hold_s', float),                       # SWARM: seconds on station
+                                ('arc=', 'arc_deg', float),                       # SWARM: spread slots over an arc
+                                ('arcc=', 'arc_center_deg', float)):              # SWARM: arc centre bearing
             if key in desc:
                 try:
                     params[name] = cast(desc.split(key, 1)[1].split()[0].split(',')[0])

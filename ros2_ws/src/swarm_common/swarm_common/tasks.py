@@ -169,9 +169,17 @@ class WorkItem:
     n_slots: int = 0
 
 
-def ring_slot_xy(cx, cy, radius, slot, n_slots, t, created_t, period_s):
-    """Slot position on a ring rotating with period_s (shared clock -> all agree)."""
-    th = 2 * math.pi * slot / max(1, n_slots) + 2 * math.pi * (t - created_t) / period_s
+def ring_slot_xy(cx, cy, radius, slot, n_slots, t, created_t, period_s,
+                 arc_deg=360.0, arc_center_deg=0.0):
+    """Slot position on a ring. A full ring rotates with period_s (shared clock -> all agree);
+    an arc < 360 deg spreads the slots evenly across that arc centred on arc_center_deg and
+    does not rotate (a frontal standoff: every slot on the approach-facing side, none behind)."""
+    n = max(1, n_slots)
+    if arc_deg >= 359.9:
+        th = 2 * math.pi * slot / n + 2 * math.pi * (t - created_t) / period_s
+    else:
+        frac = (slot / (n - 1) - 0.5) if n > 1 else 0.0
+        th = math.radians(arc_center_deg) + frac * math.radians(arc_deg)
     return cx + radius * math.cos(th), cy + radius * math.sin(th)
 
 
@@ -195,9 +203,11 @@ def derive_work_items(reg: TaskRegistry, now: float, formation_cfg,
             n = int(t.params.get("n_slots", formation_cfg.max_slots))
             r = float(t.params.get("radius", formation_cfg.ring_radius_m))
             centre = (centre_of(t) if centre_of else None) or (t.x, t.y)
+            arc = float(t.params.get("arc_deg", 360.0))
+            arc_c = float(t.params.get("arc_center_deg", 0.0))
             for s in range(n):
                 sx, sy = ring_slot_xy(centre[0], centre[1], r, s, n, now, t.created_t,
-                                      ring_period(t, formation_cfg))
+                                      ring_period(t, formation_cfg), arc, arc_c)
                 if t.kind == INTERCEPT and s == 0 and n > 1:
                     sx, sy = centre            # the shadow: overhead, keeping the target in camera
                 if t.kind == PATROL:

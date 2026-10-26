@@ -442,7 +442,9 @@ class DroneBrain:
             cx, cy, vx, vy = self._centre(parent, now)
             r = float(parent.params.get("radius", self.cfg.formation.ring_radius_m))
             period = ring_period(parent, self.cfg.formation)
-            tx, ty = ring_slot_xy(cx, cy, r, it.slot, it.n_slots, now, parent.created_t, period)
+            tx, ty = ring_slot_xy(cx, cy, r, it.slot, it.n_slots, now, parent.created_t, period,
+                                  float(parent.params.get("arc_deg", 360.0)),
+                                  float(parent.params.get("arc_center_deg", 0.0)))
             # ring rotation + centre motion feed-forward, blended in only near
             # the slot (far away it would just bend the approach path)
             w = 2 * math.pi / period
