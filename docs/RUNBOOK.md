@@ -212,6 +212,30 @@ A round takes about 4–5 minutes. Keys in the operator tab (then Enter): **Ente
 * Offline / no OSM area: `scripts/demo.sh demo-city` (a generated city, 5 drones).
 * Simulation only: the director refuses to run if any drone in the fleet is not a local simulator.
 
+### A second story: structure inspection (precision approach)
+
+```bash
+scripts/demo.sh eko --inspect                 # main screen
+scripts/demo.sh eko --inspect --gazebo --gui  # in Gazebo
+```
+
+Shows a **precise fast approach to a building, arrested at a standoff** (ISR / close
+reconnaissance - no contact, no strike). Same keys and show mode.
+
+| stage | what happens |
+|---|---|
+| 1 LAUNCH | takes off; four drones form a wide standoff ring around the structure (overwatch) |
+| 2 APPROACH | one drone makes a fast precision run straight at the building |
+| 3 STANDOFF | it **arrests ~18 m off the wall** - clear of the structure, nothing touches it → **STANDOFF ESTABLISHED** |
+| 4 INSPECT | it holds there, camera on the façade; the four keep overwatch |
+| 5 RESET | home and land |
+
+The building-brake (the same safety layer that keeps drones off buildings in every mission)
+is what stops the approaching drone clear of the wall. One drone makes the close approach and
+four hold a wide ring, so nothing ever crowds - verified safe over repeated live rounds
+(min. separation ≥ 12 m). The director auto-picks a tall building near the pads; choose one
+with `scripts/demo.py --mission inspect --structure x,y`.
+
 ## 7. If something looks wrong
 
 | you see | do |

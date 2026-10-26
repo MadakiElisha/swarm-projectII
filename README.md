@@ -32,7 +32,8 @@ start it and test every mission, step by step: **[docs/RUNBOOK.md](docs/RUNBOOK.
 drones, radios, launch sites: **[docs/HARDWARE.md](docs/HARDWARE.md)**.
 
 Exhibition: `scripts/demo.sh <area>` runs the patrol → intrusion → target identified → chase → home story
-in rounds, one key press each ([RUNBOOK §6](docs/RUNBOOK.md#6-exhibition-the-demo-loop)).
+in rounds, one key press each; `--inspect` runs a precision structure-approach story instead
+([RUNBOOK §6](docs/RUNBOOK.md#6-exhibition-the-demo-loop)).
 
 Demos of the previous (centralized-auction) version: [main_swarm.mp4](main_swarm.mp4) ·
 [Screen.Recording.2026-09-03.124931.mp4](Screen.Recording.2026-09-03.124931.mp4)

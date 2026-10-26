@@ -22,10 +22,10 @@ stage has a time limit, so a round always ends on the pads.
 
 Or the structure-inspection mission (precision approach + standoff, no contact):
 
-    1/5 LAUNCH       takes off; two drones take high overwatch
-    2/5 APPROACH     three drones make a fast precision run to a chosen building
-    3/5 STANDOFF     each arrests ~18 m off the walls - a cordon clear of the structure (no contact)
-    4/5 INSPECT      hold the standoff, cameras on the façades
+    1/5 LAUNCH       takes off; four drones ring the structure as a wide standoff overwatch
+    2/5 APPROACH     one drone makes a fast precision run to a chosen building
+    3/5 STANDOFF     it arrests ~18 m off the wall - clear of the structure, no contact
+    4/5 INSPECT      hold the standoff, camera on the façade; four hold overwatch
     5/5 RESET        home and land
 
     scripts/demo.py --mission inspect [--structure x,y] [--inspect-hold 45]
