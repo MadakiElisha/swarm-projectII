@@ -525,28 +525,29 @@ class Director(Node):
         ins = f"SWARM-INS-D{self.round}{int(time.time()) % 1000:03d}"
         ovw = f"SWARM-OVW-D{self.round}{int(time.time()) % 1000:03d}"
 
-        # 1 LAUNCH - two drones take high overwatch first (so the groups never climb out together)
-        self.stage(1, "the swarm takes off; two drones take high overwatch",
-                   f"a {S['h']:.0f} m structure at ({cx:.0f}, {cy:.0f}); two cover it from above",
+        # 1 LAUNCH - four drones ring the structure as a wide, high overwatch (a spread ring from the
+        # pads is the pattern the patrol mission proved collision-free; the close approach is a SINGLE
+        # drone, which cannot crowd anyone)
+        self.stage(1, "the swarm takes off; four drones take a wide overwatch ring",
+                   f"a {S['h']:.0f} m structure at ({cx:.0f}, {cy:.0f}); four cover it from standoff, one will go in",
                    centre=[cx, cy], radius=S["R"])
         self.gz_view("site")
-        self.task(ovw, cx, cy, f"radius={max(140.0, S['R'] * 3):.0f} slots=2 alt=95 static=1 hold=900")
+        # a standard standoff ring (the patrol pattern, proven collision-free): layered altitudes,
+        # slowly rotating - no forced common height to climb through
+        self.task(ovw, cx, cy, f"radius={max(150.0, S['R'] * 3):.0f} slots=4 hold=900")
         if self.wait(lambda: self.event(ovw, "PERIMETER_FORMED", t0), self.a.stage_timeout):
             say(f"overwatch up: {', '.join(self.holders(ovw))}", "g")
         self.spin_for(6)
 
-        # 2 APPROACH - three drones make the precision run in
+        # 2 APPROACH - one drone makes the precision run in to a single frontal standoff point
         formed = None
         if not self.reset_now:
-            self.stage(2, "three drones make a precision approach to the structure",
-                       f"fast run in; each arrests ~{S['standoff']:.0f} m off the walls - clear, no contact",
+            self.stage(2, "one drone makes a precision approach to the structure",
+                       f"a fast run in; it arrests ~{S['standoff']:.0f} m off the wall - clear, no contact",
                        centre=[cx, cy])
-            # a frontal standoff: the three close drones spread across the approach-facing arc of the
-            # structure (none has to fly around to the far face), each on its own layer, the brake
-            # arresting each clear of the wall. arc centred on the bearing from the structure to the pads.
-            arc_c = math.degrees(math.atan2(S["pads"][1] - cy, S["pads"][0] - cx))
-            self.task(ins, cx, cy, f"radius={S['R']:.0f} slots=3 alt={S['alt']:.0f} fast=1 static=1 "
-                      f"arc=150 arcc={arc_c:.0f} hold={self.a.inspect_hold + 40:.0f}")
+            arc_c = math.degrees(math.atan2(S["pads"][1] - cy, S["pads"][0] - cx))   # the approach-facing wall
+            self.task(ins, cx, cy, f"radius={S['R']:.0f} slots=1 alt={S['alt']:.0f} fast=1 static=1 "
+                      f"arcc={arc_c:.0f} hold={self.a.inspect_hold + 40:.0f}")
             formed = self.wait(lambda: self.event(ins, "PERIMETER_FORMED", t0), self.a.stage_timeout)
             hs = self.holders(ins)
             self.gz_view("follow", hs[0] if hs else self.labels[0])
@@ -554,19 +555,19 @@ class Director(Node):
         # 3 STANDOFF
         if formed and not self.reset_now:
             hs = self.holders(ins)
-            banner(f"STANDOFF ESTABLISHED  -  {len(hs)} drones on the structure", "g")
-            self.stage(3, f"standoff established - {len(hs)} drones on the structure, clear of the walls",
-                       "cameras on the façades; two drones hold high cover",
+            banner("STANDOFF ESTABLISHED  -  arrested clear of the wall", "g")
+            self.stage(3, f"standoff established - {(hs[0] if hs else 'the drone')} is holding clear of the wall",
+                       "camera on the façade; four drones hold the overwatch ring",
                        banner="STANDOFF ESTABLISHED", centre=[cx, cy], focus=hs[0] if hs else None)
         elif not self.reset_now:
-            say("cordon not fully formed in time - carrying on", "r")
+            say("standoff not reached in time - carrying on", "r")
 
         # 4 INSPECT
         if not self.reset_now:
             self.stage(4, "inspecting the structure", f"holding {self.a.inspect_hold:.0f} s",
                        centre=[cx, cy], focus=(self.holders(ins)[0] if self.holders(ins) else None))
             self.spin_for(self.a.inspect_hold)
-            say(f"inspection complete: cordon held by {', '.join(self.holders(ins)) or '-'}", "g")
+            say(f"inspection complete: standoff held by {', '.join(self.holders(ins)) or '-'}", "g")
 
         # 5 RESET
         self._finish([ins, ovw], car=False)
